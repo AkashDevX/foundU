@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   TouchableWithoutFeedback,
   Image,
   Alert,
+  Keyboard,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'react-native-image-picker';
@@ -27,12 +28,18 @@ interface Step4EmploymentDetailsProps {
 export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) {
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
+  const [branchCode, setBranchCode] = useState('');
   const [bankName, setBankName] = useState('');
   const [modeOfTransport, setModeOfTransport] = useState('');
   const [showTransportModal, setShowTransportModal] = useState(false);
   const [vehicleRegistration, setVehicleRegistration] = useState('');
   const [vehicleExpiry, setVehicleExpiry] = useState('');
   const [vehicleInsuranceUri, setVehicleInsuranceUri] = useState<string | null>(null);
+  const accountNumberRef = useRef<TextInput>(null);
+  const bankNameRef = useRef<TextInput>(null);
+  const branchCoderef = useRef<TextInput>(null);
+  const vehicleRegistrationRef = useRef<TextInput>(null);
+  const vehicleExpiryRef = useRef<TextInput>(null);
 
   const isOwnVehicle = modeOfTransport === 'Own vehicle';
   const styles = createAccountScreenStyles;
@@ -76,28 +83,59 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               value={accountName}
               onChangeText={setAccountName}
               autoCapitalize="words"
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => accountNumberRef.current?.focus()}
             />
           </View>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Account number</Text>
           <View style={styles.input}>
             <TextInput
+              ref={accountNumberRef}
               style={styles.inputField}
               placeholder="Enter account number"
               placeholderTextColor="#9CA3AF"
               value={accountNumber}
               onChangeText={setAccountNumber}
               keyboardType="number-pad"
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => branchCoderef.current?.focus()}
+            />
+          </View>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Branch Code</Text>
+          <View style={styles.input}>
+            <TextInput
+              ref={branchCoderef}
+              style={styles.inputField}
+              placeholder="Enter branch code"
+              placeholderTextColor="#9CA3AF"
+              value={branchCode}
+              onChangeText={setBranchCode}
+              keyboardType="number-pad"
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => bankNameRef.current?.focus()}
             />
           </View>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Bank name</Text>
           <View style={styles.input}>
             <TextInput
+              ref={bankNameRef}
               style={styles.inputField}
               placeholder="e.g. Commonwealth Bank"
               placeholderTextColor="#9CA3AF"
               value={bankName}
               onChangeText={setBankName}
               autoCapitalize="words"
+              returnKeyType={isOwnVehicle ? 'next' : 'done'}
+              onSubmitEditing={() => {
+                if (isOwnVehicle) {
+                  vehicleRegistrationRef.current?.focus();
+                } else {
+                  Keyboard.dismiss();
+                }
+              }}
             />
           </View>
 
@@ -120,22 +158,28 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Registration</Text>
               <View style={styles.input}>
                 <TextInput
+                  ref={vehicleRegistrationRef}
                   style={styles.inputField}
                   placeholder="Vehicle registration number"
                   placeholderTextColor="#9CA3AF"
                   value={vehicleRegistration}
                   onChangeText={setVehicleRegistration}
                   autoCapitalize="characters"
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => vehicleExpiryRef.current?.focus()}
                 />
               </View>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry</Text>
               <View style={styles.input}>
                 <TextInput
+                  ref={vehicleExpiryRef}
                   style={styles.inputField}
                   placeholder="MM / DD / YYYY"
                   placeholderTextColor="#9CA3AF"
                   value={vehicleExpiry}
                   onChangeText={setVehicleExpiry}
+                  returnKeyType="done"
                 />
                 <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
               </View>
