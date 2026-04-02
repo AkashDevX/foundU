@@ -5,10 +5,12 @@ import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { spacing } from '../../theme/theme';
 import { loginScreenStyles } from '../../styles/styles';
+import { CompanyPicker } from '../../components/CompanyPicker';
 
 export function LoginScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
+  const [companyId, setCompanyId] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -30,7 +32,9 @@ export function LoginScreen() {
         <Text style={styles.welcome}>Welcome back</Text>
         <Text style={styles.subWelcome}>Sign in to manage your shift</Text>
 
-        <Text style={styles.label}>EMAIL ADDRESS</Text>
+        <CompanyPicker variant="login" value={companyId} onChange={setCompanyId} />
+
+        <Text style={[styles.label, { marginTop: spacing.xl }]}>EMAIL ADDRESS</Text>
         <View style={styles.input}>
           <Feather name="mail" size={20} color="#9CA3AF" style={styles.inputIcon} />
           <TextInput
@@ -73,7 +77,10 @@ export function LoginScreen() {
         <TouchableOpacity
           style={styles.signInBtn}
           activeOpacity={0.88}
-          onPress={() => navigation.navigate('Main')}
+          onPress={() => {
+            // TODO: Re-enable company (and credential) validation when auth API is wired
+            navigation.navigate('Main');
+          }}
         >
           <Text style={styles.signInText}>Sign In</Text>
         </TouchableOpacity>

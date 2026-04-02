@@ -1,10 +1,23 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StatusBar, Pressable, Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StatusBar,
+  Pressable,
+  Platform,
+  PermissionsAndroid,
+  Linking,
+  ScrollView,
+  Image,
+  ActivityIndicator,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Geolocation from 'react-native-geolocation-service';
 import Feather from 'react-native-vector-icons/Feather';
 import { dashboardStyles } from '../../styles/styles';
-import { colors, spacing } from '../../theme/theme';
+import { colors } from '../../theme/theme';
+import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
 
 const WORK_ZONE_CENTER = { lat: -33.8688, lng: 151.2093 }; // Sydney CBD - configure as needed
 const WORK_ZONE_RADIUS_M = 500;
@@ -40,15 +53,39 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
   }
 }
 
+/** Shorter label for the heading (area / suburb) — full address shown below */
+function shortLocationLabel(displayName: string): string {
+  const parts = displayName.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 2) return displayName;
+  return parts.slice(0, 3).join(', ');
+}
+
+function openMapsAt(lat: number, lng: number): void {
+  const osm = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
+  Linking.openURL(osm).catch(() => {
+    const q = `${lat},${lng}`;
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`);
+  });
+}
+
 export function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isInZone, setIsInZone] = useState<boolean | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
+  const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
+  const mapLoadSeq = useRef(0);
 
   const styles = dashboardStyles;
+
+  const locationLabel = useMemo(
+    () => (locationAddress ? shortLocationLabel(locationAddress) : null),
+    [locationAddress],
+  );
 
   const openAppSettings = useCallback(() => {
     Linking.openSettings();
@@ -67,6 +104,8 @@ export function DashboardScreen() {
         const coarseGranted = result['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
         if (!fineGranted && !coarseGranted) {
           setLocationError('permission_denied');
+          setUserCoords(null);
+          setLocationAddress(null);
           setLocationLoading(false);
           return;
         }
@@ -74,6 +113,7 @@ export function DashboardScreen() {
       Geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
+          setUserCoords({ lat: latitude, lng: longitude });
           const address = await reverseGeocode(latitude, longitude);
           setLocationAddress(address);
           const distanceM = haversineDistance(
@@ -87,12 +127,16 @@ export function DashboardScreen() {
         },
         (error) => {
           setLocationError(error.message || 'Unable to get location');
+          setUserCoords(null);
+          setLocationAddress(null);
           setLocationLoading(false);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
       );
-    } catch (err: any) {
-      setLocationError(err?.message || 'Location failed');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Location failed';
+      setLocationError(message);
+      setUserCoords(null);
       setLocationLoading(false);
     }
   }, []);
@@ -100,6 +144,26 @@ export function DashboardScreen() {
   useEffect(() => {
     fetchLocation();
   }, [fetchLocation]);
+
+  useEffect(() => {
+    if (!userCoords || locationError || locationLoading) {
+      return;
+    }
+
+    const seq = ++mapLoadSeq.current;
+    setMapPreviewLoading(true);
+    setMapPreview(null);
+
+    loadOpenStreetMapPreview(userCoords.lat, userCoords.lng)
+      .then((result) => {
+        if (seq !== mapLoadSeq.current) return;
+        setMapPreview(result);
+      })
+      .finally(() => {
+        if (seq !== mapLoadSeq.current) return;
+        setMapPreviewLoading(false);
+      });
+  }, [userCoords, locationError, locationLoading]);
 
   const handleClockIn = () => {
     setIsClockedIn((prev) => !prev);
@@ -121,12 +185,17 @@ export function DashboardScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.greetingCard}>
-        <Text style={styles.greetingText}>Welcome back,</Text>
-        <Text style={styles.userName}>Alex Rivera</Text>
-      </View>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.greetingCard}>
+          <Text style={styles.greetingText}>Welcome back,</Text>
+          <Text style={styles.userName}>Alex Rivera</Text>
+        </View>
 
-      <View style={[styles.content, { paddingBottom: 100 }]}>
         <View style={styles.clockInCard}>
           <View style={[styles.clockInGeo, styles.clockInGeo1]} />
           <View style={[styles.clockInGeo, styles.clockInGeo2]} />
@@ -155,8 +224,8 @@ export function DashboardScreen() {
         </View>
 
         <View style={styles.locationCard}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
-            <Text style={[styles.locationHeading, { marginBottom: 0 }]}>Current Location</Text>
+          <View style={styles.locationCardHeaderRow}>
+            <Text style={styles.locationHeading}>Current location</Text>
             {!locationLoading && isInZone !== null && (
               <View style={isInZone ? styles.inZoneBadge : styles.outZoneBadge}>
                 <Feather
@@ -170,12 +239,14 @@ export function DashboardScreen() {
               </View>
             )}
           </View>
+
           {locationLoading && (
-            <Text style={styles.locationAddress}>Getting location...</Text>
+            <Text style={styles.locationAddress}>Getting location…</Text>
           )}
+
           {locationError && (
             <View>
-              <Text style={[styles.locationAddress, { color: '#EF4444' }]}>
+              <Text style={[styles.locationAddress, styles.locationErrorText]}>
                 {locationError === 'permission_denied'
                   ? 'Location permission is required. Please enable it in Settings.'
                   : locationError}
@@ -191,18 +262,83 @@ export function DashboardScreen() {
               )}
             </View>
           )}
-          {locationAddress && !locationLoading && (
-            <Text style={styles.locationAddress} numberOfLines={4}>{locationAddress}</Text>
+
+          {locationAddress && !locationLoading && !locationError && (
+            <>
+              {locationLabel ? (
+                <Text style={styles.locationShortName}>{locationLabel}</Text>
+              ) : null}
+              <Text style={styles.locationAddress}>{locationAddress}</Text>
+              {userCoords ? (
+                <View style={styles.locationCoordsRow}>
+                  <Feather name="map-pin" size={14} color={colors.primary} />
+                  <Text style={styles.locationCoordsText}>
+                    {userCoords.lat.toFixed(5)}, {userCoords.lng.toFixed(5)}
+                  </Text>
+                </View>
+              ) : null}
+            </>
           )}
-          <TouchableOpacity
-            style={styles.locationRefreshBtn}
-            onPress={fetchLocation}
-            disabled={locationLoading}
-          >
-            <Feather name="refresh-cw" size={18} color={locationLoading ? '#9CA3AF' : colors.primary} />
-          </TouchableOpacity>
+
+          {userCoords && !locationLoading && !locationError && (
+            <TouchableOpacity
+              style={styles.locationMapTouchable}
+              activeOpacity={0.92}
+              onPress={() => openMapsAt(userCoords.lat, userCoords.lng)}
+              accessibilityRole="button"
+              accessibilityLabel="Open map at your location"
+            >
+              {mapPreviewLoading ? (
+                <View style={styles.locationMapLoadingBox}>
+                  <ActivityIndicator size="large" color={colors.primary} />
+                  <Text style={styles.locationMapLoadingHint}>Loading map…</Text>
+                </View>
+              ) : mapPreview ? (
+                <View style={styles.locationMapImageWrap}>
+                  <Image
+                    source={{ uri: mapPreview.uri }}
+                    style={styles.locationMapImage}
+                    resizeMode="cover"
+                  />
+                  {mapPreview.mode === 'tile' ? (
+                    <View style={styles.locationMapPinOverlay} pointerEvents="none">
+                      <Feather name="map-pin" size={32} color="#DC2626" />
+                    </View>
+                  ) : null}
+                </View>
+              ) : (
+                <View style={styles.locationMapFallback}>
+                  <Feather name="map" size={40} color={colors.primary} />
+                  <Text style={styles.locationMapFallbackText}>Could not load map preview</Text>
+                  <Text style={styles.locationMapKeyHint}>
+                    Network or map service unreachable. Tap below to open your position on openstreetmap.org,
+                    or tap refresh after checking your connection.
+                  </Text>
+                  <Text style={styles.locationMapHint}>Tap to open in OpenStreetMap</Text>
+                </View>
+              )}
+              <Text style={styles.locationMapAttribution}>© OpenStreetMap contributors</Text>
+              <Text style={styles.locationMapHintBelow}>
+                {mapPreview?.mode === 'tile'
+                  ? 'Tile preview (approx. area). Tap to open exact position on OpenStreetMap.'
+                  : 'Preview uses free OSM data. Tap to open the same place on OpenStreetMap.'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <View style={styles.locationRefreshRow}>
+            <Text style={styles.locationCoordsText}>Update location</Text>
+            <TouchableOpacity
+              style={styles.locationRefreshBtn}
+              onPress={fetchLocation}
+              disabled={locationLoading}
+              hitSlop={12}
+            >
+              <Feather name="refresh-cw" size={20} color={locationLoading ? '#9CA3AF' : colors.primary} />
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }

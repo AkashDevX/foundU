@@ -129,6 +129,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           placeholderTextColor="#9CA3AF"
           value={doc.expiry}
           onChangeText={(expiry) => setDoc({ ...doc, expiry })}
+          returnKeyType="done"
         />
         <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
       </View>
@@ -180,6 +181,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           placeholderTextColor="#9CA3AF"
           value={item.expiry}
           onChangeText={(expiry) => updateLicence(item.id, { expiry })}
+          returnKeyType="done"
         />
         <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
       </View>
@@ -231,6 +233,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           placeholderTextColor="#9CA3AF"
           value={item.expiry}
           onChangeText={(expiry) => updateInsurance(item.id, { expiry })}
+          returnKeyType="done"
         />
         <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
       </View>

@@ -20,6 +20,7 @@ export function CreateAccountScreen() {
   const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState(1);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [companyId, setCompanyId] = useState<string | null>(null);
 
   const styles = createAccountScreenStyles;
   const stepConfig = STEPS[currentStep - 1];
@@ -33,6 +34,7 @@ export function CreateAccountScreen() {
   };
 
   const goNext = () => {
+    // TODO: Re-enable company selection validation before submit when ready
     if (currentStep < TOTAL_STEPS) {
       setCurrentStep((s) => s + 1);
     } else {
@@ -48,7 +50,9 @@ export function CreateAccountScreen() {
   const renderStep = () => {
     switch (currentStep) {
       case 1:
-        return <Step1PersonalProfile onNext={goNext} />;
+        return (
+          <Step1PersonalProfile onNext={goNext} companyId={companyId} onCompanyChange={setCompanyId} />
+        );
       case 2:
         return <Step2WorkEligibility onNext={goNext} />;
       case 3:
@@ -56,7 +60,9 @@ export function CreateAccountScreen() {
       case 4:
         return <Step4EmploymentDetails onNext={goNext} />;
       default:
-        return <Step1PersonalProfile onNext={goNext} />;
+        return (
+          <Step1PersonalProfile onNext={goNext} companyId={companyId} onCompanyChange={setCompanyId} />
+        );
     }
   };
 

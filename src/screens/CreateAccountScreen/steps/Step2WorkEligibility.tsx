@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -61,6 +61,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   const [preferredShift, setPreferredShift] = useState('');
   const [showVisaModal, setShowVisaModal] = useState(false);
   const [showShiftModal, setShowShiftModal] = useState(false);
+  const hoursPerWeekRef = useRef<TextInput>(null);
 
   const styles = createAccountScreenStyles;
 
@@ -204,6 +205,9 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
                   placeholderTextColor="#9CA3AF"
                   value={visaExpiry}
                   onChangeText={setVisaExpiry}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => hoursPerWeekRef.current?.focus()}
                 />
                 <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
               </View>
@@ -288,12 +292,14 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           <Text style={styles.fieldHint}>Hours per week</Text>
           <View style={styles.input}>
             <TextInput
+              ref={hoursPerWeekRef}
               style={styles.inputField}
               placeholder="e.g. 20, 38"
               placeholderTextColor="#9CA3AF"
               value={hoursPerWeek}
               onChangeText={setHoursPerWeek}
               keyboardType="number-pad"
+              returnKeyType="done"
             />
           </View>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Days available</Text>
