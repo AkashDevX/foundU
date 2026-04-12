@@ -13,10 +13,13 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Geolocation from 'react-native-geolocation-service';
 import Feather from 'react-native-vector-icons/Feather';
+import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
+import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles } from '../../styles/styles';
-import { colors } from '../../theme/theme';
+import { colors, spacing } from '../../theme/theme';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
 
 const WORK_ZONE_CENTER = { lat: -33.8688, lng: 151.2093 }; // Sydney CBD - configure as needed
@@ -69,6 +72,8 @@ function openMapsAt(lat: number, lng: number): void {
 }
 
 export function DashboardScreen() {
+  const navigation = useNavigation<any>();
+  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
@@ -81,6 +86,7 @@ export function DashboardScreen() {
   const mapLoadSeq = useRef(0);
 
   const styles = dashboardStyles;
+  const scrollBottomPad = floatingTabBarClearance(insets.bottom) + spacing.lg;
 
   const locationLabel = useMemo(
     () => (locationAddress ? shortLocationLabel(locationAddress) : null),
@@ -173,22 +179,31 @@ export function DashboardScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={styles.header}>
-        <View style={styles.profileAvatarWrap}>
+        <TouchableOpacity
+          style={styles.profileAvatarWrap}
+          onPress={() => navigation.navigate('MyProfile')}
+          activeOpacity={0.75}
+          accessibilityLabel="Open my profile"
+        >
           <View style={styles.profileAvatar}>
             <Feather name="user" size={22} color={colors.primary} />
           </View>
-        </View>
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Workforce</Text>
-        <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7}>
-          <View style={styles.bellBadge} />
-          <Feather name="bell" size={24} color={colors.primary} strokeWidth={2} />
+        <TouchableOpacity
+          style={styles.bellBtn}
+          activeOpacity={0.7}
+          onPress={openLogoutSweetAlert}
+          accessibilityLabel="Log out"
+        >
+          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
         </TouchableOpacity>
       </View>
 
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.greetingCard}>
@@ -196,28 +211,43 @@ export function DashboardScreen() {
           <Text style={styles.userName}>Alex Rivera</Text>
         </View>
 
-        <View style={styles.clockInCard}>
-          <View style={[styles.clockInGeo, styles.clockInGeo1]} />
-          <View style={[styles.clockInGeo, styles.clockInGeo2]} />
+        <View style={[styles.clockInCard, isClockedIn ? styles.clockInCardIn : styles.clockInCardOut]}>
+          <View
+            style={[
+              styles.clockInGeo,
+              styles.clockInGeo1,
+              isClockedIn ? styles.clockInGeo1In : styles.clockInGeo1Out,
+            ]}
+          />
+          <View
+            style={[
+              styles.clockInGeo,
+              styles.clockInGeo2,
+              isClockedIn ? styles.clockInGeo2In : styles.clockInGeo2Out,
+            ]}
+          />
           <Text style={styles.statusLabel}>CURRENT STATUS</Text>
           <View style={styles.statusRow}>
-            <View style={[styles.statusDot, isClockedIn && styles.statusDotActive]} />
-            <Text style={styles.statusText}>
+            <View style={[styles.statusDot, isClockedIn ? styles.statusDotIn : styles.statusDotOut]} />
+            <Text style={[styles.statusText, isClockedIn ? styles.statusTextIn : styles.statusTextOut]}>
               {isClockedIn ? 'Clocked In' : 'Not Clocked In'}
             </Text>
           </View>
-          <Pressable style={styles.clockInBtn} onPress={handleClockIn}>
+          <Pressable
+            style={[styles.clockInBtn, isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut]}
+            onPress={handleClockIn}
+          >
             <Feather
               name={isClockedIn ? 'log-out' : 'log-in'}
               size={52}
-              color={colors.primary}
+              color={isClockedIn ? '#166534' : '#991B1B'}
               style={styles.clockInBtnIcon}
             />
-            <Text style={styles.clockInBtnText}>
+            <Text style={[styles.clockInBtnText, isClockedIn ? styles.clockInBtnTextIn : styles.clockInBtnTextOut]}>
               {isClockedIn ? 'Clock Out' : 'Clock In'}
             </Text>
           </Pressable>
-          <View style={styles.shiftPill}>
+          <View style={[styles.shiftPill, isClockedIn ? styles.shiftPillIn : styles.shiftPillOut]}>
             <Feather name="clock" size={20} color="#FFFFFF" />
             <Text style={styles.shiftPillText}>Shift starts at 09:00 AM</Text>
           </View>

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,11 +18,12 @@ import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import type { UserProfileSnapshot } from '../../../types/userProfile';
 
 const TRANSPORT_OPTIONS = ['Own vehicle', 'Public transport', 'Walking', 'Other'];
 
 interface Step4EmploymentDetailsProps {
-  onNext: () => void;
+  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
 }
 
 export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) {
@@ -35,11 +36,18 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
   const [vehicleRegistration, setVehicleRegistration] = useState('');
   const [vehicleExpiry, setVehicleExpiry] = useState('');
   const [vehicleInsuranceUri, setVehicleInsuranceUri] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const accountNameRef = useRef<TextInput>(null);
   const accountNumberRef = useRef<TextInput>(null);
   const bankNameRef = useRef<TextInput>(null);
   const branchCoderef = useRef<TextInput>(null);
   const vehicleRegistrationRef = useRef<TextInput>(null);
   const vehicleExpiryRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmPasswordRef = useRef<TextInput>(null);
 
   const isOwnVehicle = modeOfTransport === 'Own vehicle';
   const styles = createAccountScreenStyles;
@@ -55,6 +63,35 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
     });
   };
 
+  const handleComplete = useCallback(() => {
+    if (password !== confirmPassword) {
+      Alert.alert('Passwords do not match', 'Please re-enter your password and confirmation so they match.');
+      return;
+    }
+    onNext({
+      bankAccountName: accountName.trim(),
+      bankAccountNumber: accountNumber.trim(),
+      bankBranchCode: branchCode.trim(),
+      bankName: bankName.trim(),
+      modeOfTransport: modeOfTransport || undefined,
+      vehicleRegistration: vehicleRegistration.trim() || undefined,
+      vehicleExpiry: vehicleExpiry.trim() || undefined,
+      vehicleInsuranceUploaded: vehicleInsuranceUri ? 'Yes' : 'No',
+    });
+  }, [
+    password,
+    confirmPassword,
+    onNext,
+    accountName,
+    accountNumber,
+    branchCode,
+    bankName,
+    modeOfTransport,
+    vehicleRegistration,
+    vehicleExpiry,
+    vehicleInsuranceUri,
+  ]);
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -64,7 +101,7 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>
@@ -75,8 +112,9 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
 
           <Text style={styles.fieldLabel}>Bank Details</Text>
           <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Account name</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => accountNameRef.current?.focus()}>
             <TextInput
+              ref={accountNameRef}
               style={styles.inputField}
               placeholder="Name on account"
               placeholderTextColor="#9CA3AF"
@@ -87,9 +125,9 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               blurOnSubmit={false}
               onSubmitEditing={() => accountNumberRef.current?.focus()}
             />
-          </View>
+          </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Account number</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => accountNumberRef.current?.focus()}>
             <TextInput
               ref={accountNumberRef}
               style={styles.inputField}
@@ -102,9 +140,9 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               blurOnSubmit={false}
               onSubmitEditing={() => branchCoderef.current?.focus()}
             />
-          </View>
+          </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Branch Code</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => branchCoderef.current?.focus()}>
             <TextInput
               ref={branchCoderef}
               style={styles.inputField}
@@ -117,9 +155,9 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               blurOnSubmit={false}
               onSubmitEditing={() => bankNameRef.current?.focus()}
             />
-          </View>
+          </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Bank name</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => bankNameRef.current?.focus()}>
             <TextInput
               ref={bankNameRef}
               style={styles.inputField}
@@ -128,16 +166,17 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
               value={bankName}
               onChangeText={setBankName}
               autoCapitalize="words"
-              returnKeyType={isOwnVehicle ? 'next' : 'done'}
+              returnKeyType="next"
+              blurOnSubmit={false}
               onSubmitEditing={() => {
                 if (isOwnVehicle) {
                   vehicleRegistrationRef.current?.focus();
                 } else {
-                  Keyboard.dismiss();
+                  passwordRef.current?.focus();
                 }
               }}
             />
-          </View>
+          </Pressable>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Mode of Transport</Text>
           <Text style={styles.fieldHint}>If own vehicle – Registration, Expiry, Insurance required</Text>
@@ -156,7 +195,7 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
             <View style={[styles.idDocCard, { marginTop: spacing.xl }]}>
               <Text style={styles.idDocCardLabel}>Vehicle Details</Text>
               <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Registration</Text>
-              <View style={styles.input}>
+              <Pressable style={styles.input} onPress={() => vehicleRegistrationRef.current?.focus()}>
                 <TextInput
                   ref={vehicleRegistrationRef}
                   style={styles.inputField}
@@ -169,9 +208,9 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
                   blurOnSubmit={false}
                   onSubmitEditing={() => vehicleExpiryRef.current?.focus()}
                 />
-              </View>
+              </Pressable>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry</Text>
-              <View style={styles.input}>
+              <Pressable style={styles.input} onPress={() => vehicleExpiryRef.current?.focus()}>
                 <TextInput
                   ref={vehicleExpiryRef}
                   style={styles.inputField}
@@ -179,10 +218,12 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
                   placeholderTextColor="#9CA3AF"
                   value={vehicleExpiry}
                   onChangeText={setVehicleExpiry}
-                  returnKeyType="done"
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => passwordRef.current?.focus()}
                 />
                 <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-              </View>
+              </Pressable>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Insurance</Text>
               <TouchableOpacity
                 style={[styles.idDocUploadArea, vehicleInsuranceUri && styles.idDocUploadAreaFilled]}
@@ -222,7 +263,59 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
             </Pressable>
           </Modal>
 
-          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={onNext}>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Create account password</Text>
+          <Text style={styles.fieldHint}>Choose a password you'll use to sign in after approval.</Text>
+          <Pressable style={[styles.input, { marginTop: spacing.sm }]} onPress={() => passwordRef.current?.focus()}>
+            <TextInput
+              ref={passwordRef}
+              style={[styles.inputField, styles.inputFieldPassword]}
+              placeholder="••••••••"
+              placeholderTextColor="#9CA3AF"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+            />
+            <TouchableOpacity
+              style={styles.passwordEyeBtn}
+              onPress={() => setShowPassword((v) => !v)}
+              activeOpacity={0.7}
+              accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            >
+              <Feather name={showPassword ? 'eye-off' : 'eye'} size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          </Pressable>
+
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Confirm password</Text>
+          <Pressable style={styles.input} onPress={() => confirmPasswordRef.current?.focus()}>
+            <TextInput
+              ref={confirmPasswordRef}
+              style={[styles.inputField, styles.inputFieldPassword]}
+              placeholder="••••••••"
+              placeholderTextColor="#9CA3AF"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry={!showConfirmPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
+            />
+            <TouchableOpacity
+              style={styles.passwordEyeBtn}
+              onPress={() => setShowConfirmPassword((v) => !v)}
+              activeOpacity={0.7}
+              accessibilityLabel={showConfirmPassword ? 'Hide password' : 'Show password'}
+            >
+              <Feather name={showConfirmPassword ? 'eye-off' : 'eye'} size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          </Pressable>
+
+          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={handleComplete}>
             <Text style={styles.saveBtnText}>Complete</Text>
             <Feather name="check" size={22} color="#FFFFFF" />
           </TouchableOpacity>

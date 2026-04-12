@@ -17,6 +17,8 @@ import Feather from 'react-native-vector-icons/Feather';
 import { spacing, colors, fontFamily } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
 import { CompanyPicker } from '../../../components/CompanyPicker';
+import { getCompanyNameById } from '../../../constants/companies';
+import type { UserProfileSnapshot } from '../../../types/userProfile';
 import { searchAddressSuggestions, type AddressSuggestion } from '../../../services/nominatim';
 
 const MARITAL_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed', 'De Facto', 'Separated'];
@@ -31,12 +33,14 @@ function formatDobDisplay(d: Date): string {
 }
 
 interface Step1PersonalProfileProps {
-  onNext: () => void;
+  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
   companyId: string | null;
   onCompanyChange: (companyId: string) => void;
 }
 
 export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Step1PersonalProfileProps) {
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [fullLegalName, setFullLegalName] = useState('');
   const [dobDate, setDobDate] = useState<Date | null>(null);
   const [showDobPicker, setShowDobPicker] = useState(false);
@@ -52,6 +56,9 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
   const [addressSearchLoading, setAddressSearchLoading] = useState(false);
   const addressDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addressPickingRef = useRef(false);
+  const emailRef = useRef<TextInput>(null);
+  const phoneRef = useRef<TextInput>(null);
+  const fullLegalNameRef = useRef<TextInput>(null);
   const addressRef = useRef<TextInput>(null);
   const emergencyNameRef = useRef<TextInput>(null);
   const emergencyPhoneRef = useRef<TextInput>(null);
@@ -60,6 +67,36 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
   const styles = createAccountScreenStyles;
   const dobMinimum = new Date(1900, 0, 1);
   const dobMaximum = new Date();
+
+  const submitStep1 = useCallback(() => {
+    onNext({
+      companyId,
+      companyName: getCompanyNameById(companyId) ?? undefined,
+      email: email.trim(),
+      phone: phone.trim(),
+      fullLegalName: fullLegalName.trim(),
+      dateOfBirth: dobDate ? formatDobDisplay(dobDate) : undefined,
+      sex: sex ?? undefined,
+      maritalStatus: maritalStatus.trim() || undefined,
+      address: address.trim(),
+      emergencyContactName: emergencyContactName.trim(),
+      emergencyContactPhone: emergencyContactPhone.trim(),
+      emergencyContactRelationship: emergencyContactRelationship.trim(),
+    });
+  }, [
+    onNext,
+    companyId,
+    email,
+    phone,
+    fullLegalName,
+    dobDate,
+    sex,
+    maritalStatus,
+    address,
+    emergencyContactName,
+    emergencyContactPhone,
+    emergencyContactRelationship,
+  ]);
 
   const openDobPicker = () => {
     setDraftDob(dobDate ?? defaultDobDate());
@@ -149,7 +186,7 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>
@@ -172,9 +209,44 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
             <CompanyPicker variant="createAccount" value={companyId} onChange={onCompanyChange} />
           </View>
 
-          <Text style={styles.fieldLabel}>Full Legal Name</Text>
-          <View style={styles.input}>
+          <Text style={styles.fieldLabel}>Email address</Text>
+          <Pressable style={styles.input} onPress={() => emailRef.current?.focus()}>
             <TextInput
+              ref={emailRef}
+              style={styles.inputField}
+              placeholder="user@email.com"
+              placeholderTextColor="#9CA3AF"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => phoneRef.current?.focus()}
+            />
+          </Pressable>
+
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Phone number</Text>
+          <Pressable style={styles.input} onPress={() => phoneRef.current?.focus()}>
+            <TextInput
+              ref={phoneRef}
+              style={styles.inputField}
+              placeholder="Mobile or contact number"
+              placeholderTextColor="#9CA3AF"
+              value={phone}
+              onChangeText={setPhone}
+              keyboardType="phone-pad"
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => fullLegalNameRef.current?.focus()}
+            />
+          </Pressable>
+
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Full Legal Name</Text>
+          <Pressable style={styles.input} onPress={() => fullLegalNameRef.current?.focus()}>
+            <TextInput
+              ref={fullLegalNameRef}
               style={styles.inputField}
               placeholder="e.g. Alex Rivera"
               placeholderTextColor="#9CA3AF"
@@ -186,7 +258,7 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
               blurOnSubmit={false}
               onSubmitEditing={() => addressRef.current?.focus()}
             />
-          </View>
+          </Pressable>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Date of Birth</Text>
           <TouchableOpacity style={styles.input} onPress={openDobPicker} activeOpacity={0.8}>
@@ -296,7 +368,10 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
             Start typing — matching addresses are suggested (OpenStreetMap).
           </Text>
           <View style={styles.addressSuggestWrap}>
-            <View style={[styles.input, styles.inputMultiline]}>
+            <Pressable
+              style={[styles.input, styles.inputMultiline]}
+              onPress={() => addressRef.current?.focus()}
+            >
               <TextInput
                 ref={addressRef}
                 style={[styles.inputField, styles.inputFieldMultiline]}
@@ -305,14 +380,13 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
                 value={address}
                 onChangeText={onAddressChangeText}
                 onBlur={onAddressBlur}
-                multiline
-                numberOfLines={3}
+                multiline={false}
                 returnKeyType="next"
-                blurOnSubmit
+                blurOnSubmit={false}
                 onSubmitEditing={() => emergencyNameRef.current?.focus()}
                 autoCorrect={false}
               />
-            </View>
+            </Pressable>
             {(addressSearchLoading || addressSuggestions.length > 0) && (
               <View style={styles.addressSuggestDropdown} pointerEvents="box-none">
                 {addressSearchLoading && addressSuggestions.length === 0 ? (
@@ -323,7 +397,7 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
                 ) : (
                   <ScrollView
                     nestedScrollEnabled
-                    keyboardShouldPersistTaps="handled"
+                    keyboardShouldPersistTaps="always"
                     style={styles.addressSuggestScroll}
                     showsVerticalScrollIndicator
                   >
@@ -348,7 +422,7 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Emergency Contact</Text>
           <Text style={styles.fieldHint}>Name</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => emergencyNameRef.current?.focus()}>
             <TextInput
               ref={emergencyNameRef}
               style={styles.inputField}
@@ -360,9 +434,9 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
               blurOnSubmit={false}
               onSubmitEditing={() => emergencyPhoneRef.current?.focus()}
             />
-          </View>
+          </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Phone</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => emergencyPhoneRef.current?.focus()}>
             <TextInput
               ref={emergencyPhoneRef}
               style={styles.inputField}
@@ -375,9 +449,9 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
               blurOnSubmit={false}
               onSubmitEditing={() => emergencyRelationshipRef.current?.focus()}
             />
-          </View>
+          </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Relationship</Text>
-          <View style={styles.input}>
+          <Pressable style={styles.input} onPress={() => emergencyRelationshipRef.current?.focus()}>
             <TextInput
               ref={emergencyRelationshipRef}
               style={styles.inputField}
@@ -386,11 +460,11 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
               value={emergencyContactRelationship}
               onChangeText={setEmergencyContactRelationship}
               returnKeyType="done"
-              onSubmitEditing={onNext}
+              onSubmitEditing={submitStep1}
             />
-          </View>
+          </Pressable>
 
-          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={onNext}>
+          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={submitStep1}>
             <Text style={styles.saveBtnText}>Save & Continue</Text>
             <Feather name="arrow-right" size={22} color="#FFFFFF" />
           </TouchableOpacity>

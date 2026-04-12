@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LogoutSweetAlertProvider } from '../context/LogoutSweetAlertContext';
 import { fontFamily } from '../theme/theme';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { ShiftsScreen } from '../screens/ShiftsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { FLOATING_TAB_BAR_BOTTOM_INSET } from './floatingTabBarMetrics';
 
 const tabBlue = '#004C99';
 const tabInactive = '#9CA3AF';
@@ -25,46 +27,50 @@ export function MainTabs() {
   const ActiveScreen = TABS.find((t) => t.key === activeTab)?.screen ?? DashboardScreen;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.screenWrap}>
-        <ActiveScreen />
-      </View>
-      <View style={[styles.tabBarOuter, { bottom: Math.max(insets.bottom, 20) }]}>
-        <View style={styles.tabBar}>
-          {TABS.map((tab) => {
-            const isActive = activeTab === tab.key;
-            return (
-              <Pressable
-                key={tab.key}
-                style={({ pressed }) => [
-                  styles.tabItem,
-                  pressed && styles.tabItemPressed,
-                ]}
-                onPress={() => setActiveTab(tab.key)}
-              >
-                <View style={[styles.tabIconWrap, isActive && styles.tabIconWrapActive]}>
-                  <Feather
-                    name={tab.icon as any}
-                    size={isActive ? 24 : 22}
-                    color={isActive ? tabBlue : tabInactive}
-                  />
-                </View>
-                <Text
-                  style={[
-                    styles.tabLabel,
-                    { color: isActive ? tabBlue : tabInactive },
-                    isActive && styles.tabLabelActive,
+    <LogoutSweetAlertProvider>
+      <View style={styles.container}>
+        <View style={styles.screenWrap}>
+          <ActiveScreen />
+        </View>
+        <View
+          style={[styles.tabBarOuter, { bottom: Math.max(insets.bottom, FLOATING_TAB_BAR_BOTTOM_INSET) }]}
+        >
+          <View style={styles.tabBar}>
+            {TABS.map((tab) => {
+              const isActive = activeTab === tab.key;
+              return (
+                <Pressable
+                  key={tab.key}
+                  style={({ pressed }) => [
+                    styles.tabItem,
+                    pressed && styles.tabItemPressed,
                   ]}
+                  onPress={() => setActiveTab(tab.key)}
                 >
-                  {tab.label}
-                </Text>
-                {isActive && <View style={styles.tabIndicator} />}
-              </Pressable>
-            );
-          })}
+                  <View style={[styles.tabIconWrap, isActive && styles.tabIconWrapActive]}>
+                    <Feather
+                      name={tab.icon as any}
+                      size={isActive ? 24 : 22}
+                      color={isActive ? tabBlue : tabInactive}
+                    />
+                  </View>
+                  <Text
+                    style={[
+                      styles.tabLabel,
+                      { color: isActive ? tabBlue : tabInactive },
+                      isActive && styles.tabLabelActive,
+                    ]}
+                  >
+                    {tab.label}
+                  </Text>
+                  {isActive && <View style={styles.tabIndicator} />}
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
       </View>
-    </View>
+    </LogoutSweetAlertProvider>
   );
 }
 
@@ -75,6 +81,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 20,
     right: 20,
+    /** Must sit above Chat composer (elevation) so tabs stay tappable on Android */
+    zIndex: 100,
+    elevation: 24,
   },
   tabBar: {
     flexDirection: 'row',

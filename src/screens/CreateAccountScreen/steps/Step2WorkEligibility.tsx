@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,11 +12,13 @@ import {
   TouchableWithoutFeedback,
   Image,
   Alert,
+  Keyboard,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import type { UserProfileSnapshot } from '../../../types/userProfile';
 
 const profileBlue = '#0056D2';
 
@@ -39,12 +41,47 @@ const VISA_OPTIONS = [
   'Other',
 ];
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEK_SCHEDULE_DAYS = [
+  { id: 'Mon', letter: 'Mo' },
+  { id: 'Tue', letter: 'Tu' },
+  { id: 'Wed', letter: 'We' },
+  { id: 'Thu', letter: 'Th' },
+  { id: 'Fri', letter: 'Fr' },
+  { id: 'Sat', letter: 'Sa' },
+  { id: 'Sun', letter: 'Su' },
+] as const;
 
-const SHIFT_OPTIONS = ['Morning', 'Afternoon', 'Evening', 'Night', 'Flexible', 'Any'];
+type TimeSlotKey = 'morning' | 'evening';
+
+const TIME_SLOTS: { key: TimeSlotKey; title: string; range: string; icon: 'sun' | 'moon' }[] = [
+  { key: 'morning', title: 'Morning', range: '6:00 AM – 11:00 AM', icon: 'sun' },
+  { key: 'evening', title: 'Evening', range: '5:00 PM – 10:00 PM', icon: 'moon' },
+];
+
+function makeEmptyWeeklySlots(): Record<string, Set<TimeSlotKey>> {
+  return Object.fromEntries(WEEK_SCHEDULE_DAYS.map((d) => [d.id, new Set<TimeSlotKey>()]));
+}
 
 interface Step2WorkEligibilityProps {
-  onNext: () => void;
+  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
+}
+
+function summarizeWeeklySlots(weekly: Record<string, Set<TimeSlotKey>>): string {
+  const parts: string[] = [];
+  for (const d of WEEK_SCHEDULE_DAYS) {
+    const set = weekly[d.id];
+    if (!set || set.size === 0) continue;
+    const slotLabels = [...set].map((k) => (k === 'morning' ? 'Morning' : 'Evening'));
+    parts.push(`${d.id}: ${slotLabels.join(', ')}`);
+  }
+  return parts.length ? parts.join(' · ') : '';
+}
+
+function summarizeIdDocs(docs: IdDocument[]): string {
+  return docs
+    .filter((d) => d.type)
+    .map((d) => (d.imageUri ? `${d.type} (uploaded)` : d.type))
+    .join(' · ');
 }
 
 export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
@@ -57,11 +94,10 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   ]);
   const [activeIdModalDocId, setActiveIdModalDocId] = useState<string | null>(null);
   const [hoursPerWeek, setHoursPerWeek] = useState('');
-  const [daysAvailable, setDaysAvailable] = useState<Set<string>>(new Set());
-  const [preferredShift, setPreferredShift] = useState('');
+  const [weeklySlots, setWeeklySlots] = useState<Record<string, Set<TimeSlotKey>>>(() => makeEmptyWeeklySlots());
   const [showVisaModal, setShowVisaModal] = useState(false);
-  const [showShiftModal, setShowShiftModal] = useState(false);
   const hoursPerWeekRef = useRef<TextInput>(null);
+  const visaExpiryRef = useRef<TextInput>(null);
 
   const styles = createAccountScreenStyles;
 
@@ -106,16 +142,21 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   const minIdMet = validIdCount >= 2;
   const VALIDATION_ENABLED = false; // TODO: Re-enable for production
 
-  const toggleDay = (day: string) => {
-    setDaysAvailable((prev) => {
-      const next = new Set(prev);
-      if (next.has(day)) next.delete(day);
-      else next.add(day);
-      return next;
+  const toggleWeeklySlot = (dayId: string, slot: TimeSlotKey) => {
+    setWeeklySlots((prev) => {
+      const nextSet = new Set(prev[dayId] ?? []);
+      if (nextSet.has(slot)) nextSet.delete(slot);
+      else nextSet.add(slot);
+      return { ...prev, [dayId]: nextSet };
     });
   };
 
-  const handleSave = () => {
+  const selectedSlotCount = WEEK_SCHEDULE_DAYS.reduce(
+    (acc, d) => acc + (weeklySlots[d.id]?.size ?? 0),
+    0,
+  );
+
+  const handleSave = useCallback(() => {
     if (VALIDATION_ENABLED && !minIdMet) {
       Alert.alert(
         'ID documents required',
@@ -123,8 +164,26 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
       );
       return;
     }
-    onNext();
-  };
+    onNext({
+      visaStatus: visaStatus || undefined,
+      unrestrictedWorkRights:
+        hasUnrestrictedWorkRights === null ? undefined : hasUnrestrictedWorkRights ? 'Yes' : 'No',
+      visaExpiry: visaExpiry.trim() || undefined,
+      hoursPerWeek: hoursPerWeek.trim() || undefined,
+      weeklyAvailabilitySummary: summarizeWeeklySlots(weeklySlots) || undefined,
+      idDocumentsSummary: summarizeIdDocs(idDocuments) || undefined,
+    });
+  }, [
+    VALIDATION_ENABLED,
+    minIdMet,
+    onNext,
+    visaStatus,
+    hasUnrestrictedWorkRights,
+    visaExpiry,
+    hoursPerWeek,
+    weeklySlots,
+    idDocuments,
+  ]);
 
   return (
     <KeyboardAvoidingView
@@ -135,7 +194,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>
@@ -198,8 +257,9 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           {hasUnrestrictedWorkRights === false && (
             <>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Visa expiry date</Text>
-              <View style={styles.input}>
+              <Pressable style={styles.input} onPress={() => visaExpiryRef.current?.focus()}>
                 <TextInput
+                  ref={visaExpiryRef}
                   style={styles.inputField}
                   placeholder="MM / DD / YYYY"
                   placeholderTextColor="#9CA3AF"
@@ -210,7 +270,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
                   onSubmitEditing={() => hoursPerWeekRef.current?.focus()}
                 />
                 <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-              </View>
+              </Pressable>
             </>
           )}
 
@@ -289,8 +349,8 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           </Modal>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Availability</Text>
-          <Text style={styles.fieldHint}>Hours per week</Text>
-          <View style={styles.input}>
+          <Text style={styles.fieldHint}>Hours per week (target)</Text>
+          <Pressable style={styles.input} onPress={() => hoursPerWeekRef.current?.focus()}>
             <TextInput
               ref={hoursPerWeekRef}
               style={styles.inputField}
@@ -300,49 +360,67 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
               onChangeText={setHoursPerWeek}
               keyboardType="number-pad"
               returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
-          </View>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Days available</Text>
-          <View style={styles.daysRow}>
-            {DAYS.map((day) => (
-              <TouchableOpacity
-                key={day}
-                style={[styles.dayChip, daysAvailable.has(day) && styles.dayChipActive]}
-                onPress={() => toggleDay(day)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.dayChipText, daysAvailable.has(day) && styles.dayChipTextActive]}>{day}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Preferred shift</Text>
-          <TouchableOpacity style={styles.input} onPress={() => setShowShiftModal(true)} activeOpacity={0.8}>
-            <Text style={[styles.inputField, !preferredShift && { color: '#9CA3AF' }]}>
-              {preferredShift || 'Select preferred shift'}
-            </Text>
-            <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
-          </TouchableOpacity>
+          </Pressable>
 
-          <Modal visible={showShiftModal} transparent animationType="fade">
-            <Pressable style={styles.modalOverlay} onPress={() => setShowShiftModal(false)}>
-              <TouchableWithoutFeedback>
-                <View style={styles.modalContent}>
-                  {SHIFT_OPTIONS.map((opt, idx) => (
-                    <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === SHIFT_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
-                      onPress={() => {
-                        setPreferredShift(opt);
-                        setShowShiftModal(false);
-                      }}
-                    >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
-                    </TouchableOpacity>
-                  ))}
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Weekly schedule</Text>
+          <View style={styles.scheduleCalendarCard}>
+            <Text style={styles.scheduleCalendarTitle}>Tap days & time blocks</Text>
+            <Text style={styles.scheduleCalendarHint}>
+              Build a simple week view: choose morning or evening (or both) for each day you can work.
+            </Text>
+
+            <View style={styles.scheduleWeekHeader}>
+              {WEEK_SCHEDULE_DAYS.map((d) => (
+                <View key={d.id} style={styles.scheduleWeekHeaderCell}>
+                  <Text style={styles.scheduleWeekHeaderText}>{d.letter}</Text>
                 </View>
-              </TouchableWithoutFeedback>
-            </Pressable>
-          </Modal>
+              ))}
+            </View>
+
+            {TIME_SLOTS.map((slot) => (
+              <View key={slot.key} style={styles.scheduleSlotBlock}>
+                <View style={styles.scheduleSlotLabelRow}>
+                  <Feather
+                    name={slot.icon}
+                    size={18}
+                    color={profileBlue}
+                  />
+                  <View style={styles.scheduleSlotLabelTextWrap}>
+                    <Text style={styles.scheduleSlotTitle}>{slot.title}</Text>
+                    <Text style={styles.scheduleSlotTime}>{slot.range}</Text>
+                  </View>
+                </View>
+                <View style={styles.scheduleGridRow}>
+                  {WEEK_SCHEDULE_DAYS.map((d) => {
+                    const active = weeklySlots[d.id]?.has(slot.key) ?? false;
+                    return (
+                      <TouchableOpacity
+                        key={`${d.id}-${slot.key}`}
+                        style={[styles.scheduleCell, active && styles.scheduleCellActive]}
+                        onPress={() => toggleWeeklySlot(d.id, slot.key)}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${d.id} ${slot.title} ${active ? 'selected' : 'not selected'}`}
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text style={[styles.scheduleCellText, active && styles.scheduleCellTextActive]}>
+                          {active ? '✓' : '—'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ))}
+
+            <Text style={styles.scheduleSummary}>
+              {selectedSlotCount === 0
+                ? 'No time blocks selected yet.'
+                : `${selectedSlotCount} time block${selectedSlotCount === 1 ? '' : 's'} selected across the week.`}
+            </Text>
+          </View>
 
           <TouchableOpacity
             style={[styles.saveBtn, VALIDATION_ENABLED && !minIdMet && { opacity: 0.6 }]}

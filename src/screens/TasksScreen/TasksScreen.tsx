@@ -7,7 +7,9 @@ import {
   StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
+import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { dashboardStyles, tasksStyles } from '../../styles/styles';
 import { colors } from '../../theme/theme';
 
@@ -107,6 +109,8 @@ function priorityLabel(p: TaskPriority): string {
 }
 
 export function TasksScreen() {
+  const navigation = useNavigation<any>();
+  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const headerStyles = dashboardStyles;
   const styles = tasksStyles;
@@ -131,15 +135,24 @@ export function TasksScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={headerStyles.header}>
-        <View style={headerStyles.profileAvatarWrap}>
+        <TouchableOpacity
+          style={headerStyles.profileAvatarWrap}
+          onPress={() => navigation.navigate('MyProfile')}
+          activeOpacity={0.75}
+          accessibilityLabel="Open my profile"
+        >
           <View style={headerStyles.profileAvatar}>
             <Feather name="user" size={22} color={colors.primary} />
           </View>
-        </View>
+        </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Tasks</Text>
-        <TouchableOpacity style={headerStyles.bellBtn} activeOpacity={0.7}>
-          <View style={headerStyles.bellBadge} />
-          <Feather name="bell" size={24} color={colors.primary} strokeWidth={2} />
+        <TouchableOpacity
+          style={headerStyles.bellBtn}
+          activeOpacity={0.7}
+          onPress={openLogoutSweetAlert}
+          accessibilityLabel="Log out"
+        >
+          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
         </TouchableOpacity>
       </View>
 
@@ -147,7 +160,7 @@ export function TasksScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
       >
         <Text style={styles.sectionTitle}>Site tasks</Text>
         <Text style={styles.sectionSubtitle}>

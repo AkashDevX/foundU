@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, StatusBar, Modal, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { createAccountScreenStyles } from '../../styles/styles';
+import type { UserProfileSnapshot } from '../../types/userProfile';
+import { loadAccountProfile, saveAccountProfile } from '../../services/accountProfileStorage';
 import { Step1PersonalProfile, Step2WorkEligibility, Step3Qualifications, Step4EmploymentDetails } from './steps';
 
 const STEPS = [
@@ -21,6 +23,7 @@ export function CreateAccountScreen() {
   const [currentStep, setCurrentStep] = useState(1);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const profileSnapshotRef = useRef<Partial<UserProfileSnapshot>>({});
 
   const styles = createAccountScreenStyles;
   const stepConfig = STEPS[currentStep - 1];
@@ -33,17 +36,24 @@ export function CreateAccountScreen() {
     }
   };
 
-  const goNext = () => {
-    // TODO: Re-enable company selection validation before submit when ready
-    if (currentStep < TOTAL_STEPS) {
-      setCurrentStep((s) => s + 1);
-    } else {
-      setShowSuccessModal(true);
+  const goNext = useCallback((stepPatch?: Partial<UserProfileSnapshot>) => {
+    if (stepPatch) {
+      profileSnapshotRef.current = { ...profileSnapshotRef.current, ...stepPatch };
     }
-  };
+    setCurrentStep((step) => {
+      if (step < TOTAL_STEPS) {
+        return step + 1;
+      }
+      setShowSuccessModal(true);
+      return step;
+    });
+  }, []);
 
-  const handleSuccessOk = () => {
+  const handleSuccessOk = async () => {
     setShowSuccessModal(false);
+    const base = await loadAccountProfile();
+    const merged: UserProfileSnapshot = { ...base, ...profileSnapshotRef.current };
+    await saveAccountProfile(merged);
     navigation.navigate('Login');
   };
 
@@ -51,7 +61,11 @@ export function CreateAccountScreen() {
     switch (currentStep) {
       case 1:
         return (
-          <Step1PersonalProfile onNext={goNext} companyId={companyId} onCompanyChange={setCompanyId} />
+          <Step1PersonalProfile
+            onNext={goNext}
+            companyId={companyId}
+            onCompanyChange={setCompanyId}
+          />
         );
       case 2:
         return <Step2WorkEligibility onNext={goNext} />;
@@ -70,10 +84,19 @@ export function CreateAccountScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.7}>
-          <Feather name="arrow-left" size={24} color="#0056D2" />
-        </TouchableOpacity>
-        <Text style={styles.topBarTitle}>Workforce</Text>
+        <View style={styles.topBarSide}>
+          <TouchableOpacity
+            onPress={goBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            activeOpacity={0.7}
+          >
+            <Feather name="arrow-left" size={24} color="#0056D2" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.topBarTitle} numberOfLines={1}>
+          Workforce
+        </Text>
+        <View style={styles.topBarSideRight} />
       </View>
 
       <View style={styles.progressSection}>

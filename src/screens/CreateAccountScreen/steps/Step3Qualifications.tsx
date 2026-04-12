@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import type { UserProfileSnapshot } from '../../../types/userProfile';
 
 const profileBlue = '#0056D2';
 
@@ -44,7 +45,35 @@ type InsuranceItem = {
 };
 
 interface Step3QualificationsProps {
-  onNext: () => void;
+  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
+}
+
+type CaStyles = typeof createAccountScreenStyles;
+
+function ExpiryDateInputRow({
+  styles,
+  value,
+  onChangeText,
+}: {
+  styles: CaStyles;
+  value: string;
+  onChangeText: (text: string) => void;
+}) {
+  const ref = useRef<TextInput>(null);
+  return (
+    <Pressable style={styles.input} onPress={() => ref.current?.focus()}>
+      <TextInput
+        ref={ref}
+        style={styles.inputField}
+        placeholder="MM / DD / YYYY"
+        placeholderTextColor="#9CA3AF"
+        value={value}
+        onChangeText={onChangeText}
+        returnKeyType="done"
+      />
+      <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
+    </Pressable>
+  );
 }
 
 export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
@@ -122,17 +151,11 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <View style={styles.input}>
-        <TextInput
-          style={styles.inputField}
-          placeholder="MM / DD / YYYY"
-          placeholderTextColor="#9CA3AF"
-          value={doc.expiry}
-          onChangeText={(expiry) => setDoc({ ...doc, expiry })}
-          returnKeyType="done"
-        />
-        <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-      </View>
+      <ExpiryDateInputRow
+        styles={styles}
+        value={doc.expiry}
+        onChangeText={(expiry) => setDoc({ ...doc, expiry })}
+      />
     </View>
   );
 
@@ -174,17 +197,11 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <View style={styles.input}>
-        <TextInput
-          style={styles.inputField}
-          placeholder="MM / DD / YYYY"
-          placeholderTextColor="#9CA3AF"
-          value={item.expiry}
-          onChangeText={(expiry) => updateLicence(item.id, { expiry })}
-          returnKeyType="done"
-        />
-        <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-      </View>
+      <ExpiryDateInputRow
+        styles={styles}
+        value={item.expiry}
+        onChangeText={(expiry) => updateLicence(item.id, { expiry })}
+      />
     </View>
   );
 
@@ -226,23 +243,17 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <View style={styles.input}>
-        <TextInput
-          style={styles.inputField}
-          placeholder="MM / DD / YYYY"
-          placeholderTextColor="#9CA3AF"
-          value={item.expiry}
-          onChangeText={(expiry) => updateInsurance(item.id, { expiry })}
-          returnKeyType="done"
-        />
-        <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-      </View>
+      <ExpiryDateInputRow
+        styles={styles}
+        value={item.expiry}
+        onChangeText={(expiry) => updateInsurance(item.id, { expiry })}
+      />
     </View>
   );
 
   const VALIDATION_ENABLED = false; // TODO: Re-enable for production
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     if (VALIDATION_ENABLED && (!policeCheck.imageUri || !fitToWork.imageUri)) {
       Alert.alert(
         'Required documents',
@@ -250,8 +261,23 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
       );
       return;
     }
-    onNext();
-  };
+    const licLine = licences
+      .filter((l) => l.type)
+      .map((l) => `${l.type}${l.expiry ? ` (exp. ${l.expiry})` : ''}`)
+      .join(' · ');
+    const insLine = insurances
+      .filter((i) => i.type)
+      .map((i) => `${i.type}${i.expiry ? ` (exp. ${i.expiry})` : ''}`)
+      .join(' · ');
+    onNext({
+      policeCheckExpiry: policeCheck.expiry.trim() || undefined,
+      policeCheckUploaded: policeCheck.imageUri ? 'Yes' : 'No',
+      fitToWorkExpiry: fitToWork.expiry.trim() || undefined,
+      fitToWorkUploaded: fitToWork.imageUri ? 'Yes' : 'No',
+      licencesSummary: licLine || undefined,
+      insurancesSummary: insLine || undefined,
+    });
+  }, [VALIDATION_ENABLED, policeCheck, fitToWork, licences, insurances, onNext]);
 
   return (
     <KeyboardAvoidingView
@@ -262,7 +288,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>

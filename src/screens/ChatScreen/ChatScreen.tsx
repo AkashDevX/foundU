@@ -9,11 +9,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   ListRenderItemInfo,
+  InteractionManager,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
+import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
+import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles, chatStyles } from '../../styles/styles';
-import { colors } from '../../theme/theme';
+import { colors, spacing } from '../../theme/theme';
 
 export type ChatMessage = {
   id: string;
@@ -72,23 +76,35 @@ function nextId(): string {
 }
 
 export function ChatScreen() {
+  const navigation = useNavigation<any>();
+  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const headerStyles = dashboardStyles;
   const styles = chatStyles;
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [inputText, setInputText] = useState('');
-  /** Floating tab bar: ~72px pill + padding + labels; sits at max(insets,20) from bottom */
-  const tabBarReserve = Math.max(insets.bottom, 20) + 104;
+  const tabBarReserve = floatingTabBarClearance(insets.bottom);
+  const composerRowHeight = spacing.sm + 48 + spacing.sm;
+  const composerDockHeight = tabBarReserve + composerRowHeight;
 
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+  const scrollToBottom = useCallback((animated = true) => {
+    const scroll = () => {
+      listRef.current?.scrollToEnd({ animated });
+    };
+    InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(scroll);
+      });
     });
   }, []);
 
   useEffect(() => {
-    scrollToBottom();
+    scrollToBottom(true);
+    const t = setTimeout(() => {
+      listRef.current?.scrollToEnd({ animated: false });
+    }, 120);
+    return () => clearTimeout(t);
   }, [messages.length, scrollToBottom]);
 
   const appendExchange = useCallback((userText: string, assistantText: string) => {
@@ -163,55 +179,74 @@ export function ChatScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={headerStyles.header}>
-        <View style={headerStyles.profileAvatarWrap}>
+        <TouchableOpacity
+          style={headerStyles.profileAvatarWrap}
+          onPress={() => navigation.navigate('MyProfile')}
+          activeOpacity={0.75}
+          accessibilityLabel="Open my profile"
+        >
           <View style={headerStyles.profileAvatar}>
-            <Feather name="message-circle" size={22} color={colors.primary} />
+            <Feather name="user" size={22} color={colors.primary} />
           </View>
-        </View>
+        </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Assistant</Text>
-        <TouchableOpacity style={headerStyles.bellBtn} activeOpacity={0.7}>
-          <Feather name="help-circle" size={24} color={colors.primary} strokeWidth={2} />
+        <TouchableOpacity
+          style={headerStyles.bellBtn}
+          activeOpacity={0.7}
+          onPress={openLogoutSweetAlert}
+          accessibilityLabel="Log out"
+        >
+          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
         </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
         style={styles.keyboardFill}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-       keyboardVerticalOffset={0}
+        keyboardVerticalOffset={0}
       >
-        <FlatList
-          ref={listRef}
-          style={styles.messagesList}
-          contentContainerStyle={styles.messagesContent}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          ListHeaderComponent={listHeader}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          onContentSizeChange={scrollToBottom}
-        />
-
-        <View style={[styles.inputBar, { paddingBottom: tabBarReserve }]}>
-          <TextInput
-            style={styles.inputField}
-            placeholder="Ask a question…"
-            placeholderTextColor="#9CA3AF"
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            maxLength={2000}
-            returnKeyType="default"
+        <View style={styles.chatBody}>
+          <FlatList
+            ref={listRef}
+            style={styles.messagesList}
+            contentContainerStyle={[
+              styles.messagesContent,
+              { paddingBottom: composerDockHeight + spacing.md },
+            ]}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            renderItem={renderItem}
+            ListHeaderComponent={listHeader}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="always"
+            onContentSizeChange={() => scrollToBottom(true)}
           />
-          <TouchableOpacity
-            style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
-            onPress={onSend}
-            disabled={!inputText.trim()}
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-          >
-            <Feather name="send" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
+
+          <View style={[styles.composerDock, { paddingBottom: tabBarReserve }]}>
+            <View style={styles.composerRow}>
+              <TextInput
+                style={styles.inputField}
+                placeholder="Ask a question…"
+                placeholderTextColor="#9CA3AF"
+                value={inputText}
+                onChangeText={setInputText}
+                multiline={false}
+                maxLength={2000}
+                returnKeyType="send"
+                blurOnSubmit
+                onSubmitEditing={onSend}
+              />
+              <TouchableOpacity
+                style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
+                onPress={onSend}
+                disabled={!inputText.trim()}
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+              >
+                <Feather name="send" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </View>

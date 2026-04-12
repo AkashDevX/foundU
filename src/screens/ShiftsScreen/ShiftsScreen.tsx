@@ -6,15 +6,22 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
+  StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
-import { colors, fontFamily } from '../../theme/theme';
+import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
+import { dashboardStyles } from '../../styles/styles';
+import { colors, fontFamily, spacing } from '../../theme/theme';
 
 type TabType = 'Upcoming' | 'History' | 'Pending';
 
 export function ShiftsScreen() {
+  const navigation = useNavigation<any>();
+  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
+  const headerStyles = dashboardStyles;
   const [activeTab, setActiveTab] = useState<TabType>('Upcoming');
   const [elapsed, setElapsed] = useState({ h: 4, m: 18, s: 22 });
 
@@ -41,33 +48,54 @@ export function ShiftsScreen() {
 
   return (
     <View style={[s.container, { paddingTop: insets.top, paddingBottom: 100 }]}>
-      <Text style={s.screenTitle}>Shifts</Text>
-
-      {/* Segmented Control */}
-      <View style={s.segmentedWrap}>
-        {(['Upcoming', 'History', 'Pending'] as TabType[]).map((tab) => (
-          <Pressable
-            key={tab}
-            style={[s.segmentedTab, activeTab === tab && s.segmentedTabActive]}
-            onPress={() => setActiveTab(tab)}
-          >
-            <Text
-              style={[
-                s.segmentedTabText,
-                activeTab === tab && s.segmentedTabTextActive,
-              ]}
-            >
-              {tab}
-            </Text>
-          </Pressable>
-        ))}
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={headerStyles.header}>
+        <TouchableOpacity
+          style={headerStyles.profileAvatarWrap}
+          onPress={() => navigation.navigate('MyProfile')}
+          activeOpacity={0.75}
+          accessibilityLabel="Open my profile"
+        >
+          <View style={headerStyles.profileAvatar}>
+            <Feather name="user" size={22} color={colors.primary} />
+          </View>
+        </TouchableOpacity>
+        <Text style={headerStyles.headerTitle}>Shifts</Text>
+        <TouchableOpacity
+          style={headerStyles.bellBtn}
+          activeOpacity={0.7}
+          onPress={openLogoutSweetAlert}
+          accessibilityLabel="Log out"
+        >
+          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+        </TouchableOpacity>
       </View>
 
-      <ScrollView
-        style={s.scroll}
-        contentContainerStyle={s.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={s.bodyPad}>
+        <View style={s.segmentedWrap}>
+          {(['Upcoming', 'History', 'Pending'] as TabType[]).map((tab) => (
+            <Pressable
+              key={tab}
+              style={[s.segmentedTab, activeTab === tab && s.segmentedTabActive]}
+              onPress={() => setActiveTab(tab)}
+            >
+              <Text
+                style={[
+                  s.segmentedTabText,
+                  activeTab === tab && s.segmentedTabTextActive,
+                ]}
+              >
+                {tab}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
         {/* CURRENT SESSION */}
         <Text style={s.sectionLabel}>CURRENT SESSION</Text>
         <View style={s.sessionCard}>
@@ -150,7 +178,8 @@ export function ShiftsScreen() {
             </Text>
           </View>
         </View>
-      </ScrollView>
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -158,22 +187,19 @@ export function ShiftsScreen() {
 const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F7F8FA',
-    paddingHorizontal: 28,
+    backgroundColor: '#F0F2F5',
   },
-  screenTitle: {
-    fontFamily: fontFamily.bold,
-    fontSize: 24,
-    color: colors.text.primary,
-    marginTop: 24,
-    marginBottom: 20,
+  bodyPad: {
+    flex: 1,
+    paddingHorizontal: spacing.xxxl,
   },
   segmentedWrap: {
     flexDirection: 'row',
     backgroundColor: '#E5E7EB',
     borderRadius: 14,
     padding: 4,
-    marginBottom: 24,
+    marginTop: spacing.md,
+    marginBottom: spacing.xl,
   },
   segmentedTab: {
     flex: 1,
