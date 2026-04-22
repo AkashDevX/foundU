@@ -2,12 +2,18 @@ export const colors = {
   primary: '#003D7A',
   primaryDark: '#002855',
   primaryLight: '#0052A2',
+  /** Login header / brand navy; onboarding forms use `accent` for controls */
   white: '#FFFFFF',
   background: '#FFFFFF',
+  /** Shell behind cards on onboarding / profile flows */
+  surfaceMuted: '#F5F6F8',
   card: '#FFFFFF',
   inputBg: '#E5E7EB',
+  border: '#E5E7EB',
   text: { primary: '#000000', secondary: '#6B7280', label: '#003366', link: '#2563EB' },
   icon: '#9CA3AF',
+  /** Progress, field labels, primary actions on light screens (matches create-account `profileBlue`) */
+  accent: '#0056D2',
 } as const;
 
 /** Poppins font family - use globally for all screens */

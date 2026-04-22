@@ -2,8 +2,13 @@
 
     <!-- Base application theme. -->
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- Native pickers (e.g. DatePickerDialog) read colorPrimary / colorAccent -->
+        <item name="colorPrimary">@color/app_primary</item>
+        <item name="colorPrimaryDark">@color/app_primary_dark</item>
+        <item name="colorAccent">@color/app_primary</item>
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <!-- Avoid long white flash while JS / Metro loads (matches app header & theme primary) -->
+        <item name="android:windowBackground">@color/app_primary</item>
     </style>
 
 </resources>

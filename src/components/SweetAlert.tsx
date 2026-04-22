@@ -39,6 +39,8 @@ export type SweetAlertProps = {
   onConfirm: () => void;
   onClose: () => void;
   variant?: SweetAlertVariant;
+  /** When true, only the primary button is shown (typical OK / got it alerts). */
+  hideCancel?: boolean;
 };
 
 /**
@@ -53,13 +55,16 @@ export function SweetAlert({
   onConfirm,
   onClose,
   variant = 'warning',
+  hideCancel = false,
 }: SweetAlertProps) {
   const v = VARIANT[variant];
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Dismiss dialog" />
+        {!hideCancel && (
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Dismiss dialog" />
+        )}
         <View style={styles.card} accessibilityRole="alert">
           <View style={[styles.iconRing, { backgroundColor: v.iconWrap }]}>
             <Feather name={v.icon} size={36} color={v.iconColor} strokeWidth={2.2} />
@@ -67,16 +72,18 @@ export function SweetAlert({
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
           <View style={styles.actions}>
+            {!hideCancel && (
+              <TouchableOpacity
+                style={styles.btnCancel}
+                onPress={onClose}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+              >
+                <Text style={styles.btnCancelText}>{cancelText}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
-              style={styles.btnCancel}
-              onPress={onClose}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-            >
-              <Text style={styles.btnCancelText}>{cancelText}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btnConfirm, { backgroundColor: v.confirmBg }]}
+              style={[styles.btnConfirm, { backgroundColor: v.confirmBg }, hideCancel && styles.btnConfirmFull]}
               onPress={onConfirm}
               activeOpacity={0.88}
               accessibilityRole="button"
@@ -163,6 +170,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  btnConfirmFull: {
+    marginTop: 4,
   },
   btnConfirmText: {
     fontFamily: fontFamily.bold,

@@ -5,15 +5,16 @@ import {
   TouchableOpacity,
   ScrollView,
   StatusBar,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { createAccountScreenStyles, myProfileScreenStyles } from '../../styles/styles';
 import { loadAccountProfile } from '../../services/accountProfileStorage';
+import { getSessionAuthenticated } from '../../services/authSessionStorage';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { colors, spacing } from '../../theme/theme';
+import { FullScreenLoader } from '../../components/FullScreenLoader';
 
 function display(v: string | undefined | null): string {
   if (v == null || String(v).trim() === '') return '—';
@@ -68,12 +69,19 @@ export function MyProfileScreen() {
   const mp = myProfileScreenStyles;
   const [profile, setProfile] = useState<UserProfileSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionAuthenticated, setSessionAuthenticated] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
-    loadAccountProfile()
-      .then(setProfile)
-      .finally(() => setLoading(false));
+    void (async () => {
+      const signedIn = await getSessionAuthenticated();
+      setSessionAuthenticated(signedIn);
+      if (!signedIn) {
+        setProfile({});
+        return;
+      }
+      setProfile(await loadAccountProfile());
+    })().finally(() => setLoading(false));
   }, []);
 
   useFocusEffect(
@@ -102,12 +110,7 @@ export function MyProfileScreen() {
       </View>
 
       {loading || !profile ? (
-        <View style={[mp.scrollOuter, { flex: 1, justifyContent: 'center', alignItems: 'center' }]}>
-          <View style={mp.loadingCard}>
-            <ActivityIndicator size="large" color="#0056D2" />
-            <Text style={mp.loadingHint}>Loading your profile…</Text>
-          </View>
-        </View>
+        <FullScreenLoader variant="light" message="Loading your profile…" />
       ) : (
         <ScrollView
           style={mp.scrollOuter}
@@ -130,8 +133,14 @@ export function MyProfileScreen() {
               {[display(profile.email), display(profile.phone)].filter((x) => x !== '—').join(' · ') || '—'}
             </Text>
             <View style={mp.heroBadge}>
-              <Feather name="check-circle" size={16} color="#059669" />
-              <Text style={mp.heroBadgeText}>Details on file</Text>
+              <Feather
+                name={sessionAuthenticated ? 'check-circle' : 'info'}
+                size={16}
+                color={sessionAuthenticated ? '#059669' : '#6B7280'}
+              />
+              <Text style={mp.heroBadgeText}>
+                {sessionAuthenticated ? 'Details on file' : 'Sign in to load your profile'}
+              </Text>
             </View>
           </View>
 

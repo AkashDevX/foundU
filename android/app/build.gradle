@@ -85,6 +85,8 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // Required by AndroidManifest `${usesCleartextTraffic}` — allows http:// to dev PC (emulator → Laravel).
+        manifestPlaceholders = [usesCleartextTraffic: "true"]
     }
     signingConfigs {
         debug {
@@ -97,6 +99,7 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
@@ -104,6 +107,8 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            // Prefer HTTPS to your API in production; cleartext off unless you still need http.
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
         }
     }
 }

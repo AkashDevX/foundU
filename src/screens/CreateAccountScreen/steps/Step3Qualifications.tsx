@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,18 +11,22 @@ import {
   Pressable,
   TouchableWithoutFeedback,
   Image,
-  Alert,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
+import { SweetAlert } from '../../../components/SweetAlert';
+import {
+  ThemedDatePickerField,
+  addYears,
+  startOfToday,
+} from '../../../components/ThemedDatePickerField';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
+import type { RegistrationWizardNext } from '../../../types/registrationUploads';
 
 const profileBlue = '#0056D2';
-
-const LICENCE_OPTIONS = ['RSA (Responsible Service of Alcohol)', 'Forklift Licence', 'First Aid', 'White Card', 'Other'];
-const INSURANCE_OPTIONS = ['Public Liability', 'Professional Indemnity', 'Workers Compensation', 'Other'];
 
 type DocWithExpiry = {
   id: string;
@@ -45,38 +49,14 @@ type InsuranceItem = {
 };
 
 interface Step3QualificationsProps {
-  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
-}
-
-type CaStyles = typeof createAccountScreenStyles;
-
-function ExpiryDateInputRow({
-  styles,
-  value,
-  onChangeText,
-}: {
-  styles: CaStyles;
-  value: string;
-  onChangeText: (text: string) => void;
-}) {
-  const ref = useRef<TextInput>(null);
-  return (
-    <Pressable style={styles.input} onPress={() => ref.current?.focus()}>
-      <TextInput
-        ref={ref}
-        style={styles.inputField}
-        placeholder="MM / DD / YYYY"
-        placeholderTextColor="#9CA3AF"
-        value={value}
-        onChangeText={onChangeText}
-        returnKeyType="done"
-      />
-      <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-    </Pressable>
-  );
+  onNext: RegistrationWizardNext;
 }
 
 export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
+  const { picklists } = useAppBootstrap();
+  const licenceOptions = picklists.licence_type ?? [];
+  const insuranceOptions = picklists.insurance_type ?? [];
+
   const [policeCheck, setPoliceCheck] = useState<DocWithExpiry>({ id: 'pc', imageUri: null, expiry: '' });
   const [fitToWork, setFitToWork] = useState<DocWithExpiry>({ id: 'ftw', imageUri: null, expiry: '' });
   const [licences, setLicences] = useState<LicenceItem[]>([]);
@@ -85,15 +65,20 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
   const [showInsuranceModal, setShowInsuranceModal] = useState(false);
   const [activeLicenceId, setActiveLicenceId] = useState<string | null>(null);
   const [activeInsuranceId, setActiveInsuranceId] = useState<string | null>(null);
+  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
 
   const styles = createAccountScreenStyles;
 
+  const expiryMinDate = startOfToday();
+  const expiryMaxDate = addYears(expiryMinDate, 50);
+  const expiryDefaultDate = addYears(expiryMinDate, 1);
+
   const pickImage = (onSelect: (uri: string) => void) => {
     if (!ImagePicker.launchImageLibrary) {
-      Alert.alert(
-        'Image picker not available',
-        'Please fully rebuild the app after installing react-native-image-picker.',
-      );
+      setBlockingAlert({
+        title: 'Image picker not available',
+        message: 'Please fully rebuild the app after installing react-native-image-picker.',
+      });
       return;
     }
     ImagePicker.launchImageLibrary({ mediaType: 'photo' }, (res) => {
@@ -151,10 +136,12 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <ExpiryDateInputRow
-        styles={styles}
+      <ThemedDatePickerField
         value={doc.expiry}
-        onChangeText={(expiry) => setDoc({ ...doc, expiry })}
+        onChange={(expiry) => setDoc({ ...doc, expiry })}
+        minimumDate={expiryMinDate}
+        maximumDate={expiryMaxDate}
+        defaultPickerDate={expiryDefaultDate}
       />
     </View>
   );
@@ -197,10 +184,12 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <ExpiryDateInputRow
-        styles={styles}
+      <ThemedDatePickerField
         value={item.expiry}
-        onChangeText={(expiry) => updateLicence(item.id, { expiry })}
+        onChange={(expiry) => updateLicence(item.id, { expiry })}
+        minimumDate={expiryMinDate}
+        maximumDate={expiryMaxDate}
+        defaultPickerDate={expiryDefaultDate}
       />
     </View>
   );
@@ -243,10 +232,12 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         )}
       </TouchableOpacity>
       <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
-      <ExpiryDateInputRow
-        styles={styles}
+      <ThemedDatePickerField
         value={item.expiry}
-        onChangeText={(expiry) => updateInsurance(item.id, { expiry })}
+        onChange={(expiry) => updateInsurance(item.id, { expiry })}
+        minimumDate={expiryMinDate}
+        maximumDate={expiryMaxDate}
+        defaultPickerDate={expiryDefaultDate}
       />
     </View>
   );
@@ -255,10 +246,10 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
 
   const handleSave = useCallback(() => {
     if (VALIDATION_ENABLED && (!policeCheck.imageUri || !fitToWork.imageUri)) {
-      Alert.alert(
-        'Required documents',
-        'Please upload both Police Check and Fit to Work Certificate.',
-      );
+      setBlockingAlert({
+        title: 'Required documents',
+        message: 'Please upload both Police Check and Fit to Work Certificate.',
+      });
       return;
     }
     const licLine = licences
@@ -269,6 +260,37 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
       .filter((i) => i.type)
       .map((i) => `${i.type}${i.expiry ? ` (exp. ${i.expiry})` : ''}`)
       .join(' · ');
+    const licencesJson = licences
+      .filter((l) => l.type)
+      .map((l) => ({
+        id: l.id,
+        type: l.type,
+        expiry: l.expiry.trim(),
+        imageUploaded: Boolean(l.imageUri),
+      }));
+
+    const insurancesJson = insurances
+      .filter((i) => i.type)
+      .map((i) => ({
+        id: i.id,
+        type: i.type,
+        expiry: i.expiry.trim(),
+        imageUploaded: Boolean(i.imageUri),
+      }));
+
+    const licenceUriById: Record<string, string> = {};
+    for (const l of licences) {
+      if (l.type && l.imageUri) {
+        licenceUriById[l.id] = l.imageUri;
+      }
+    }
+    const insuranceUriById: Record<string, string> = {};
+    for (const ins of insurances) {
+      if (ins.type && ins.imageUri) {
+        insuranceUriById[ins.id] = ins.imageUri;
+      }
+    }
+
     onNext({
       policeCheckExpiry: policeCheck.expiry.trim() || undefined,
       policeCheckUploaded: policeCheck.imageUri ? 'Yes' : 'No',
@@ -276,11 +298,19 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
       fitToWorkUploaded: fitToWork.imageUri ? 'Yes' : 'No',
       licencesSummary: licLine || undefined,
       insurancesSummary: insLine || undefined,
+      licencesJson,
+      insurancesJson,
+    }, {
+      policeCheckUri: policeCheck.imageUri || undefined,
+      fitToWorkUri: fitToWork.imageUri || undefined,
+      licenceUriById,
+      insuranceUriById,
     });
   }, [VALIDATION_ENABLED, policeCheck, fitToWork, licences, insurances, onNext]);
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
@@ -320,16 +350,16 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
             <Pressable style={styles.modalOverlay} onPress={() => setShowLicenceModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {LICENCE_OPTIONS.map((opt, idx) => (
+                  {licenceOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === LICENCE_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === licenceOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
-                        if (activeLicenceId) updateLicence(activeLicenceId, { type: opt });
+                        if (activeLicenceId) updateLicence(activeLicenceId, { type: opt.value });
                         setShowLicenceModal(false);
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -341,16 +371,16 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
             <Pressable style={styles.modalOverlay} onPress={() => setShowInsuranceModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {INSURANCE_OPTIONS.map((opt, idx) => (
+                  {insuranceOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === INSURANCE_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === insuranceOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
-                        if (activeInsuranceId) updateInsurance(activeInsuranceId, { type: opt });
+                        if (activeInsuranceId) updateInsurance(activeInsuranceId, { type: opt.value });
                         setShowInsuranceModal(false);
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -369,5 +399,18 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+
+      <SweetAlert
+        visible={blockingAlert !== null}
+        title={blockingAlert?.title ?? ''}
+        message={blockingAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={() => setBlockingAlert(null)}
+        onConfirm={() => setBlockingAlert(null)}
+      />
+    </>
   );
 }

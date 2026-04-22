@@ -19,34 +19,7 @@ import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { spacing } from '../../theme/theme';
 import { createAccountScreenStyles } from '../../styles/styles';
-
-const INDUSTRY_OPTIONS = [
-  'Healthcare',
-  'Construction',
-  'Retail',
-  'Hospitality & tourism',
-  'Manufacturing',
-  'Education & training',
-  'Technology & IT',
-  'Professional services',
-  'Government & public sector',
-  'Not-for-profit',
-  'Transport & logistics',
-  'Mining & resources',
-  'Agriculture & primary industries',
-  'Other',
-];
-
-const EMPLOYEE_BAND_OPTIONS = [
-  '1–10',
-  '11–50',
-  '51–200',
-  '201–500',
-  '501–1,000',
-  '1,001–5,000',
-  '5,000+',
-  'Other',
-];
+import { useAppBootstrap } from '../../context/AppBootstrapContext';
 
 const pickerModalStyles = StyleSheet.create({
   card: {
@@ -69,6 +42,9 @@ export function RequestOrganizationScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
+  const { picklists } = useAppBootstrap();
+  const industryOptions = picklists.request_organization_industry ?? [];
+  const employeeBandOptions = picklists.request_organization_employee_band ?? [];
   const styles = createAccountScreenStyles;
 
   /** Keep option lists on-screen with room for safe areas and keyboard */
@@ -329,21 +305,21 @@ export function RequestOrganizationScreen() {
               style={{ maxHeight: pickerScrollMaxHeight }}
               bounces={false}
             >
-              {INDUSTRY_OPTIONS.map((opt, idx) => (
+              {industryOptions.map((opt, idx) => (
                 <TouchableOpacity
-                  key={opt}
+                  key={opt.value}
                   style={[
                     styles.modalOption,
                     pickerModalStyles.optionRow,
-                    idx === INDUSTRY_OPTIONS.length - 1 ? styles.modalOptionLast : null,
+                    idx === industryOptions.length - 1 ? styles.modalOptionLast : null,
                   ]}
                   onPress={() => {
-                    setIndustry(opt);
-                    if (opt !== 'Other') setIndustryOther('');
+                    setIndustry(opt.value);
+                    if (opt.value !== 'Other') setIndustryOther('');
                     setShowIndustryModal(false);
                   }}
                 >
-                  <Text style={[styles.modalOptionText, pickerModalStyles.optionText]}>{opt}</Text>
+                  <Text style={[styles.modalOptionText, pickerModalStyles.optionText]}>{opt.label}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -362,21 +338,21 @@ export function RequestOrganizationScreen() {
               style={{ maxHeight: pickerScrollMaxHeight }}
               bounces={false}
             >
-              {EMPLOYEE_BAND_OPTIONS.map((opt, idx) => (
+              {employeeBandOptions.map((opt, idx) => (
                 <TouchableOpacity
-                  key={opt}
+                  key={opt.value}
                   style={[
                     styles.modalOption,
                     pickerModalStyles.optionRow,
-                    idx === EMPLOYEE_BAND_OPTIONS.length - 1 ? styles.modalOptionLast : null,
+                    idx === employeeBandOptions.length - 1 ? styles.modalOptionLast : null,
                   ]}
                   onPress={() => {
-                    setEmployeeBand(opt);
-                    if (opt !== 'Other') setEmployeeBandOther('');
+                    setEmployeeBand(opt.value);
+                    if (opt.value !== 'Other') setEmployeeBandOther('');
                     setShowEmployeeModal(false);
                   }}
                 >
-                  <Text style={[styles.modalOptionText, pickerModalStyles.optionText]}>{opt}</Text>
+                  <Text style={[styles.modalOptionText, pickerModalStyles.optionText]}>{opt.label}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>

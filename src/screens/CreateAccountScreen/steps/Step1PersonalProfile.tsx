@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,40 +11,45 @@ import {
   Pressable,
   TouchableWithoutFeedback,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import Feather from 'react-native-vector-icons/Feather';
-import { spacing, colors, fontFamily } from '../../../theme/theme';
+import * as ImagePicker from 'react-native-image-picker';
+import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import { SweetAlert } from '../../../components/SweetAlert';
 import { CompanyPicker } from '../../../components/CompanyPicker';
-import { getCompanyNameById } from '../../../constants/companies';
+import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
+import type { RegistrationWizardNext } from '../../../types/registrationUploads';
 import { searchAddressSuggestions, type AddressSuggestion } from '../../../services/nominatim';
-
-const MARITAL_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed', 'De Facto', 'Separated'];
-
-const defaultDobDate = () => new Date(1990, 0, 1);
-
-function formatDobDisplay(d: Date): string {
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${mm} / ${dd} / ${yyyy}`;
-}
+import {
+  ThemedDatePickerField,
+  formatDateToDisplay,
+  parseDisplayDateToDate,
+} from '../../../components/ThemedDatePickerField';
 
 interface Step1PersonalProfileProps {
-  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
-  companyId: string | null;
-  onCompanyChange: (companyId: string) => void;
+  onNext: RegistrationWizardNext;
+  /** Master DB company slug from GET /api/v1/bootstrap. */
+  companySlug: string | null;
+  onCompanySlugChange: (slug: string) => void;
+  /** Restored when returning from a later step (registration upload ref). */
+  initialProfilePhotoUri?: string | null;
 }
 
-export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Step1PersonalProfileProps) {
+export function Step1PersonalProfile({
+  onNext,
+  companySlug,
+  onCompanySlugChange,
+  initialProfilePhotoUri = null,
+}: Step1PersonalProfileProps) {
+  const { companies, picklists, loading: bootstrapLoading } = useAppBootstrap();
+  const maritalOptions = picklists.marital_status ?? [];
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [fullLegalName, setFullLegalName] = useState('');
   const [dobDate, setDobDate] = useState<Date | null>(null);
-  const [showDobPicker, setShowDobPicker] = useState(false);
-  const [draftDob, setDraftDob] = useState(defaultDobDate);
   const [sex, setSex] = useState<'male' | 'female' | null>(null);
   const [maritalStatus, setMaritalStatus] = useState('');
   const [address, setAddress] = useState('');
@@ -54,6 +59,15 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
   const [showMaritalModal, setShowMaritalModal] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressSearchLoading, setAddressSearchLoading] = useState(false);
+  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
+  const [profilePhotoUri, setProfilePhotoUri] = useState<string | null>(() => initialProfilePhotoUri ?? null);
+
+  useEffect(() => {
+    setProfilePhotoUri(initialProfilePhotoUri ?? null);
+  }, [initialProfilePhotoUri]);
+
+  const dobDefaultForPicker = useMemo(() => new Date(1990, 0, 1), []);
+
   const addressDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addressPickingRef = useRef(false);
   const emailRef = useRef<TextInput>(null);
@@ -68,24 +82,67 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
   const dobMinimum = new Date(1900, 0, 1);
   const dobMaximum = new Date();
 
+  const pickProfilePhoto = useCallback(() => {
+    if (!ImagePicker.launchImageLibrary) {
+      setBlockingAlert({
+        title: 'Image picker not available',
+        message: 'Please fully rebuild the app after installing react-native-image-picker.',
+      });
+      return;
+    }
+    ImagePicker.launchImageLibrary(
+      {
+        mediaType: 'photo',
+        selectionLimit: 1,
+      },
+      (res) => {
+        if (res.didCancel || res.errorCode || !res.assets?.[0]?.uri) {
+          return;
+        }
+        setProfilePhotoUri(res.assets[0].uri);
+      },
+    );
+  }, []);
+
   const submitStep1 = useCallback(() => {
-    onNext({
-      companyId,
-      companyName: getCompanyNameById(companyId) ?? undefined,
-      email: email.trim(),
-      phone: phone.trim(),
-      fullLegalName: fullLegalName.trim(),
-      dateOfBirth: dobDate ? formatDobDisplay(dobDate) : undefined,
-      sex: sex ?? undefined,
-      maritalStatus: maritalStatus.trim() || undefined,
-      address: address.trim(),
-      emergencyContactName: emergencyContactName.trim(),
-      emergencyContactPhone: emergencyContactPhone.trim(),
-      emergencyContactRelationship: emergencyContactRelationship.trim(),
-    });
+    if (!companySlug) {
+      setBlockingAlert({
+        title: 'Select company',
+        message: 'Choose your organization so your profile is saved to the correct workplace.',
+      });
+      return;
+    }
+    const org = companies.find((c) => c.slug === companySlug);
+    if (!org) {
+      setBlockingAlert({
+        title: 'Select company',
+        message: 'Organization list is still loading or unavailable.',
+      });
+      return;
+    }
+    onNext(
+      {
+        companySlug,
+        registrationCompanySlug: companySlug,
+        registrationCompanyAppKey: org.appKey ?? undefined,
+        companyName: org.name,
+        email: email.trim(),
+        phone: phone.trim(),
+        fullLegalName: fullLegalName.trim(),
+        dateOfBirth: dobDate ? formatDateToDisplay(dobDate) : undefined,
+        sex: sex ?? undefined,
+        maritalStatus: maritalStatus.trim() || undefined,
+        address: address.trim(),
+        emergencyContactName: emergencyContactName.trim(),
+        emergencyContactPhone: emergencyContactPhone.trim(),
+        emergencyContactRelationship: emergencyContactRelationship.trim(),
+      },
+      profilePhotoUri ? { profilePhotoUri } : undefined,
+    );
   }, [
     onNext,
-    companyId,
+    companySlug,
+    companies,
     email,
     phone,
     fullLegalName,
@@ -96,31 +153,8 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
     emergencyContactName,
     emergencyContactPhone,
     emergencyContactRelationship,
+    profilePhotoUri,
   ]);
-
-  const openDobPicker = () => {
-    setDraftDob(dobDate ?? defaultDobDate());
-    setShowDobPicker(true);
-  };
-
-  const onAndroidDobChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowDobPicker(false);
-    if (event.type === 'dismissed') return;
-    if (selectedDate) setDobDate(selectedDate);
-  };
-
-  const onIosDobChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (selectedDate) setDraftDob(selectedDate);
-  };
-
-  const confirmIosDob = () => {
-    setDobDate(draftDob);
-    setShowDobPicker(false);
-  };
-
-  const dismissIosDobPicker = () => {
-    setShowDobPicker(false);
-  };
 
   useEffect(() => {
     return () => {
@@ -178,7 +212,8 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
   }, []);
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
@@ -197,16 +232,42 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
 
           <View style={styles.photoSection}>
             <View style={styles.photoWrapper}>
-              <View style={styles.photoCircle} />
-              <TouchableOpacity style={styles.photoAddBtn} activeOpacity={0.8}>
-                <Feather name="plus" size={24} color="#FFFFFF" />
+              <TouchableOpacity
+                activeOpacity={0.88}
+                onPress={pickProfilePhoto}
+                accessibilityRole="button"
+                accessibilityLabel={profilePhotoUri ? 'Change profile photo' : 'Add profile photo'}
+              >
+                <View style={styles.photoCircle}>
+                  {profilePhotoUri ? (
+                    <Image
+                      source={{ uri: profilePhotoUri }}
+                      style={styles.photoCircleImage}
+                      resizeMode="cover"
+                    />
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.photoAddBtn}
+                activeOpacity={0.85}
+                onPress={pickProfilePhoto}
+                accessibilityLabel="Choose photo from library"
+              >
+                <Feather name={profilePhotoUri ? 'edit-2' : 'plus'} size={22} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.uploadLabel}>Upload Photo</Text>
+            <Text style={styles.uploadLabel}>{profilePhotoUri ? 'Photo added — tap to change' : 'Upload Photo'}</Text>
           </View>
 
           <View style={styles.step1CompanyPickerWrap}>
-            <CompanyPicker variant="createAccount" value={companyId} onChange={onCompanyChange} />
+            <CompanyPicker
+              variant="createAccount"
+              companies={companies}
+              listingLoading={bootstrapLoading}
+              value={companySlug}
+              onChange={onCompanySlugChange}
+            />
           </View>
 
           <Text style={styles.fieldLabel}>Email address</Text>
@@ -261,61 +322,18 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
           </Pressable>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Date of Birth</Text>
-          <TouchableOpacity style={styles.input} onPress={openDobPicker} activeOpacity={0.8}>
-            <Text style={[styles.inputField, !dobDate && { color: '#9CA3AF' }]}>
-              {dobDate ? formatDobDisplay(dobDate) : 'MM / DD / YYYY'}
-            </Text>
-            <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-          </TouchableOpacity>
-
-          {Platform.OS === 'android' && showDobPicker ? (
-            <DateTimePicker
-              value={dobDate ?? defaultDobDate()}
-              mode="date"
-              display="default"
-              onChange={onAndroidDobChange}
-              maximumDate={dobMaximum}
-              minimumDate={dobMinimum}
-            />
-          ) : null}
-
-          <Modal visible={Platform.OS === 'ios' && showDobPicker} transparent animationType="fade">
-            <Pressable style={styles.modalOverlay} onPress={dismissIosDobPicker}>
-              <TouchableWithoutFeedback>
-                <View style={styles.modalContent}>
-                  <DateTimePicker
-                    value={draftDob}
-                    mode="date"
-                    display="spinner"
-                    onChange={onIosDobChange}
-                    maximumDate={dobMaximum}
-                    minimumDate={dobMinimum}
-                    themeVariant="light"
-                  />
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'flex-end',
-                      gap: spacing.xl,
-                      marginTop: spacing.md,
-                      paddingTop: spacing.lg,
-                      borderTopWidth: 1,
-                      borderTopColor: '#E5E7EB',
-                    }}
-                  >
-                    <TouchableOpacity onPress={dismissIosDobPicker} hitSlop={12}>
-                      <Text style={{ fontFamily: fontFamily.semiBold, fontSize: 16, color: colors.text.secondary }}>
-                        Cancel
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={confirmIosDob} hitSlop={12}>
-                      <Text style={{ fontFamily: fontFamily.semiBold, fontSize: 16, color: '#0056D2' }}>Done</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </TouchableWithoutFeedback>
-            </Pressable>
-          </Modal>
+          <ThemedDatePickerField
+            value={dobDate ? formatDateToDisplay(dobDate) : ''}
+            onChange={(s) => {
+              const d = parseDisplayDateToDate(s);
+              if (d) {
+                setDobDate(d);
+              }
+            }}
+            minimumDate={dobMinimum}
+            maximumDate={dobMaximum}
+            defaultPickerDate={dobDefaultForPicker}
+          />
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Sex</Text>
           <View style={styles.sexRow}>
@@ -346,16 +364,16 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
             <Pressable style={styles.modalOverlay} onPress={() => setShowMaritalModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {MARITAL_OPTIONS.map((opt, idx) => (
+                  {maritalOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === MARITAL_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === maritalOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
-                        setMaritalStatus(opt);
+                        setMaritalStatus(opt.value);
                         setShowMaritalModal(false);
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -471,5 +489,18 @@ export function Step1PersonalProfile({ onNext, companyId, onCompanyChange }: Ste
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+
+      <SweetAlert
+        visible={blockingAlert !== null}
+        title={blockingAlert?.title ?? ''}
+        message={blockingAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={() => setBlockingAlert(null)}
+        onConfirm={() => setBlockingAlert(null)}
+      />
+    </>
   );
 }

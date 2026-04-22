@@ -76,7 +76,8 @@ export function MainTabs() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  screenWrap: { flex: 1 },
+  /** Matches dashboard/chat shell so tab switches do not flash white before the screen paints. */
+  screenWrap: { flex: 1, backgroundColor: '#F0F2F5' },
   tabBarOuter: {
     position: 'absolute',
     left: 20,

@@ -128,7 +128,6 @@ export function ShiftsScreen() {
             <Text style={s.viewCalendarLink}>View Calendar</Text>
           </TouchableOpacity>
         </View>
-
         {/* Confirmed Shift Card */}
         <View style={s.shiftCard}>
           <View style={s.shiftCardBadgeConfirmed}>

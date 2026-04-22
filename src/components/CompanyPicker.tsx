@@ -7,9 +7,10 @@ import {
   TouchableOpacity,
   TouchableWithoutFeedback,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
-import { COMPANIES } from '../constants/companies';
+import type { BootstrapCompany } from '../types/bootstrap';
 import { spacing } from '../theme/theme';
 import { createAccountScreenStyles, loginScreenStyles } from '../styles/styles';
 
@@ -17,19 +18,29 @@ type CompanyPickerVariant = 'login' | 'createAccount';
 
 export interface CompanyPickerProps {
   variant: CompanyPickerVariant;
+  /** Companies from GET /api/v1/bootstrap (master DB). */
+  companies: BootstrapCompany[];
+  listingLoading?: boolean;
   value: string | null;
-  onChange: (companyId: string) => void;
+  /** Selected company {@link BootstrapCompany.slug}. */
+  onChange: (slug: string) => void;
 }
 
-export function CompanyPicker({ variant, value, onChange }: CompanyPickerProps) {
+export function CompanyPicker({
+  variant,
+  companies,
+  listingLoading,
+  value,
+  onChange,
+}: CompanyPickerProps) {
   const [open, setOpen] = useState(false);
 
   const label = variant === 'login' ? 'COMPANY / ORGANIZATION' : 'Company or organization';
 
   const selectedName = useMemo(() => {
     if (!value) return null;
-    return COMPANIES.find((c) => c.id === value)?.name ?? null;
-  }, [value]);
+    return companies.find((c) => c.slug === value)?.name ?? null;
+  }, [value, companies]);
 
   const loginStyles = loginScreenStyles;
   const caStyles = createAccountScreenStyles;
@@ -68,7 +79,9 @@ export function CompanyPicker({ variant, value, onChange }: CompanyPickerProps) 
           ]}
           numberOfLines={1}
         >
-          {selectedName ?? 'Select your company'}
+          {listingLoading
+            ? 'Loading organizations…'
+            : selectedName ?? (companies.length === 0 ? 'No organizations available' : 'Select your company')}
         </Text>
         <Feather name="chevron-down" size={20} color="#6B7280" />
       </TouchableOpacity>
@@ -77,19 +90,26 @@ export function CompanyPicker({ variant, value, onChange }: CompanyPickerProps) 
         <Pressable style={caStyles.modalOverlay} onPress={() => setOpen(false)}>
           <TouchableWithoutFeedback>
             <View style={caStyles.modalContent}>
-              {COMPANIES.map((c, idx) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[caStyles.modalOption, idx === COMPANIES.length - 1 ? caStyles.modalOptionLast : null]}
-                  onPress={() => {
-                    onChange(c.id);
-                    setOpen(false);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={caStyles.modalOptionText}>{c.name}</Text>
-                </TouchableOpacity>
-              ))}
+              {listingLoading ? (
+                <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
+                  <ActivityIndicator color="#0056D2" />
+                  <Text style={[caStyles.modalOptionText, { marginTop: spacing.md }]}>Loading…</Text>
+                </View>
+              ) : (
+                companies.map((c, idx) => (
+                  <TouchableOpacity
+                    key={c.slug}
+                    style={[caStyles.modalOption, idx === companies.length - 1 ? caStyles.modalOptionLast : null]}
+                    onPress={() => {
+                      onChange(c.slug);
+                      setOpen(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={caStyles.modalOptionText}>{c.name}</Text>
+                  </TouchableOpacity>
+                ))
+              )}
             </View>
           </TouchableWithoutFeedback>
         </Pressable>

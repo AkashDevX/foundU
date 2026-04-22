@@ -11,35 +11,29 @@ import {
   Pressable,
   TouchableWithoutFeedback,
   Image,
-  Alert,
   Keyboard,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
+import { SweetAlert } from '../../../components/SweetAlert';
+import {
+  ThemedDatePickerField,
+  addYears,
+  startOfToday,
+} from '../../../components/ThemedDatePickerField';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
+import type { RegistrationWizardNext } from '../../../types/registrationUploads';
 
 const profileBlue = '#0056D2';
 
-type IdDocumentType = "Driver's Licence" | 'Passport' | 'Medicare' | '18+ Card';
-
 type IdDocument = {
   id: string;
-  type: IdDocumentType | '';
+  type: string;
   imageUri: string | null;
 };
-
-const ID_TYPE_OPTIONS: IdDocumentType[] = ["Driver's Licence", 'Passport', 'Medicare', '18+ Card'];
-
-const VISA_OPTIONS = [
-  'Australian Citizen',
-  'Permanent Resident',
-  'Temporary Visa - Working',
-  'Temporary Visa - Student',
-  'Working Holiday Visa',
-  'Other',
-];
 
 const WEEK_SCHEDULE_DAYS = [
   { id: 'Mon', letter: 'Mo' },
@@ -63,7 +57,7 @@ function makeEmptyWeeklySlots(): Record<string, Set<TimeSlotKey>> {
 }
 
 interface Step2WorkEligibilityProps {
-  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
+  onNext: RegistrationWizardNext;
 }
 
 function summarizeWeeklySlots(weekly: Record<string, Set<TimeSlotKey>>): string {
@@ -85,6 +79,10 @@ function summarizeIdDocs(docs: IdDocument[]): string {
 }
 
 export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
+  const { picklists } = useAppBootstrap();
+  const visaOptions = picklists.visa_status ?? [];
+  const idTypeOptions = picklists.id_document_type ?? [];
+
   const [visaStatus, setVisaStatus] = useState('');
   const [hasUnrestrictedWorkRights, setHasUnrestrictedWorkRights] = useState<boolean | null>(null);
   const [visaExpiry, setVisaExpiry] = useState('');
@@ -96,10 +94,14 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   const [hoursPerWeek, setHoursPerWeek] = useState('');
   const [weeklySlots, setWeeklySlots] = useState<Record<string, Set<TimeSlotKey>>>(() => makeEmptyWeeklySlots());
   const [showVisaModal, setShowVisaModal] = useState(false);
+  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
   const hoursPerWeekRef = useRef<TextInput>(null);
-  const visaExpiryRef = useRef<TextInput>(null);
 
   const styles = createAccountScreenStyles;
+
+  const visaExpiryMinDate = startOfToday();
+  const visaExpiryMaxDate = addYears(visaExpiryMinDate, 50);
+  const visaExpiryDefaultDate = addYears(visaExpiryMinDate, 2);
 
   const updateIdDoc = (docId: string, updates: Partial<IdDocument>) => {
     setIdDocuments((prev) =>
@@ -126,10 +128,11 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
 
   const pickImageForDoc = (docId: string) => {
     if (!ImagePicker.launchImageLibrary) {
-      Alert.alert(
-        'Image picker not available',
-        'Please fully rebuild the app after installing react-native-image-picker. Stop the app, run "npx react-native run-android" (or run-ios), then try again.',
-      );
+      setBlockingAlert({
+        title: 'Image picker not available',
+        message:
+          'Please fully rebuild the app after installing react-native-image-picker. Stop the app, run "npx react-native run-android" (or run-ios), then try again.',
+      });
       return;
     }
     ImagePicker.launchImageLibrary({ mediaType: 'photo' }, (res) => {
@@ -158,12 +161,32 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
 
   const handleSave = useCallback(() => {
     if (VALIDATION_ENABLED && !minIdMet) {
-      Alert.alert(
-        'ID documents required',
-        'Please upload at least 2 ID documents (Driver\'s Licence, Passport, Medicare, or 18+ Card) with both type selected and document image uploaded.',
-      );
+      setBlockingAlert({
+        title: 'ID documents required',
+        message:
+          "Please upload at least 2 ID documents (Driver's Licence, Passport, Medicare, or 18+ Card) with both type selected and document image uploaded.",
+      });
       return;
     }
+    const weeklyAvailabilityJson = Object.fromEntries(
+      WEEK_SCHEDULE_DAYS.map((d) => [d.id, [...(weeklySlots[d.id] ?? [])]]),
+    );
+
+    const idDocumentsJson = idDocuments
+      .filter((d) => d.type)
+      .map((d) => ({
+        documentKey: d.id,
+        idType: d.type,
+        imageUploaded: Boolean(d.imageUri),
+      }));
+
+    const idDocumentByKey: Record<string, string> = {};
+    for (const d of idDocuments) {
+      if (d.type && d.imageUri) {
+        idDocumentByKey[d.id] = d.imageUri;
+      }
+    }
+
     onNext({
       visaStatus: visaStatus || undefined,
       unrestrictedWorkRights:
@@ -171,8 +194,10 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
       visaExpiry: visaExpiry.trim() || undefined,
       hoursPerWeek: hoursPerWeek.trim() || undefined,
       weeklyAvailabilitySummary: summarizeWeeklySlots(weeklySlots) || undefined,
+      weeklyAvailabilityJson,
       idDocumentsSummary: summarizeIdDocs(idDocuments) || undefined,
-    });
+      idDocumentsJson,
+    }, { idDocumentByKey });
   }, [
     VALIDATION_ENABLED,
     minIdMet,
@@ -186,7 +211,8 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   ]);
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
@@ -215,16 +241,16 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             <Pressable style={styles.modalOverlay} onPress={() => setShowVisaModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {VISA_OPTIONS.map((opt, idx) => (
+                  {visaOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === VISA_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === visaOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
-                        setVisaStatus(opt);
+                        setVisaStatus(opt.value);
                         setShowVisaModal(false);
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -257,20 +283,13 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           {hasUnrestrictedWorkRights === false && (
             <>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Visa expiry date</Text>
-              <Pressable style={styles.input} onPress={() => visaExpiryRef.current?.focus()}>
-                <TextInput
-                  ref={visaExpiryRef}
-                  style={styles.inputField}
-                  placeholder="MM / DD / YYYY"
-                  placeholderTextColor="#9CA3AF"
-                  value={visaExpiry}
-                  onChangeText={setVisaExpiry}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => hoursPerWeekRef.current?.focus()}
-                />
-                <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-              </Pressable>
+              <ThemedDatePickerField
+                value={visaExpiry}
+                onChange={setVisaExpiry}
+                minimumDate={visaExpiryMinDate}
+                maximumDate={visaExpiryMaxDate}
+                defaultPickerDate={visaExpiryDefaultDate}
+              />
             </>
           )}
 
@@ -329,18 +348,18 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             <Pressable style={styles.modalOverlay} onPress={closeIdTypeModal}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {ID_TYPE_OPTIONS.map((opt, idx) => (
+                  {idTypeOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === ID_TYPE_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === idTypeOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
                         if (activeIdModalDocId) {
-                          updateIdDoc(activeIdModalDocId, { type: opt });
+                          updateIdDoc(activeIdModalDocId, { type: opt.value });
                           closeIdTypeModal();
                         }
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -433,5 +452,18 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+
+      <SweetAlert
+        visible={blockingAlert !== null}
+        title={blockingAlert?.title ?? ''}
+        message={blockingAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={() => setBlockingAlert(null)}
+        onConfirm={() => setBlockingAlert(null)}
+      />
+    </>
   );
 }

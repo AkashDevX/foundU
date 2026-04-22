@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,22 +11,38 @@ import {
   Pressable,
   TouchableWithoutFeedback,
   Image,
-  Alert,
   Keyboard,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
+import { SweetAlert } from '../../../components/SweetAlert';
+import {
+  ThemedDatePickerField,
+  addYears,
+  startOfToday,
+} from '../../../components/ThemedDatePickerField';
 import * as ImagePicker from 'react-native-image-picker';
 import { spacing } from '../../../theme/theme';
 import { createAccountScreenStyles } from '../../../styles/styles';
+import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
-
-const TRANSPORT_OPTIONS = ['Own vehicle', 'Public transport', 'Walking', 'Other'];
+import type { RegistrationWizardNext } from '../../../types/registrationUploads';
 
 interface Step4EmploymentDetailsProps {
-  onNext: (patch?: Partial<UserProfileSnapshot>) => void;
+  onNext: RegistrationWizardNext;
+  /** Increment when returning from a failed registration submit so password fields refocus. */
+  focusPasswordSignal?: number;
+  /** True while registration POST is running after tapping Complete. */
+  isSubmitting?: boolean;
 }
 
-export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) {
+export function Step4EmploymentDetails({
+  onNext,
+  focusPasswordSignal = 0,
+  isSubmitting = false,
+}: Step4EmploymentDetailsProps) {
+  const { picklists } = useAppBootstrap();
+  const transportOptions = picklists.transport_mode ?? [];
+
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [branchCode, setBranchCode] = useState('');
@@ -45,16 +61,38 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
   const bankNameRef = useRef<TextInput>(null);
   const branchCoderef = useRef<TextInput>(null);
   const vehicleRegistrationRef = useRef<TextInput>(null);
-  const vehicleExpiryRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const confirmPasswordRef = useRef<TextInput>(null);
+
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    focusPasswordOnOk?: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (focusPasswordSignal <= 0) {
+      return;
+    }
+    const id = setTimeout(() => {
+      passwordRef.current?.focus();
+    }, 450);
+    return () => clearTimeout(id);
+  }, [focusPasswordSignal]);
 
   const isOwnVehicle = modeOfTransport === 'Own vehicle';
   const styles = createAccountScreenStyles;
 
+  const vehicleExpiryMinDate = startOfToday();
+  const vehicleExpiryMaxDate = addYears(vehicleExpiryMinDate, 15);
+  const vehicleExpiryDefaultDate = addYears(vehicleExpiryMinDate, 1);
+
   const pickImage = (onSelect: (uri: string) => void) => {
     if (!ImagePicker.launchImageLibrary) {
-      Alert.alert('Image picker not available', 'Please fully rebuild the app.');
+      setBlockingAlert({
+        title: 'Image picker not available',
+        message: 'Please fully rebuild the app.',
+      });
       return;
     }
     ImagePicker.launchImageLibrary({ mediaType: 'photo' }, (res) => {
@@ -65,19 +103,31 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
 
   const handleComplete = useCallback(() => {
     if (password !== confirmPassword) {
-      Alert.alert('Passwords do not match', 'Please re-enter your password and confirmation so they match.');
+      setBlockingAlert({
+        title: 'Passwords do not match',
+        message: 'Please re-enter your password and confirmation so they match.',
+        focusPasswordOnOk: true,
+      });
       return;
     }
-    onNext({
-      bankAccountName: accountName.trim(),
-      bankAccountNumber: accountNumber.trim(),
-      bankBranchCode: branchCode.trim(),
-      bankName: bankName.trim(),
-      modeOfTransport: modeOfTransport || undefined,
-      vehicleRegistration: vehicleRegistration.trim() || undefined,
-      vehicleExpiry: vehicleExpiry.trim() || undefined,
-      vehicleInsuranceUploaded: vehicleInsuranceUri ? 'Yes' : 'No',
-    });
+    if (isSubmitting) {
+      return;
+    }
+    onNext(
+      {
+        bankAccountName: accountName.trim(),
+        bankAccountNumber: accountNumber.trim(),
+        bankBranchCode: branchCode.trim(),
+        bankName: bankName.trim(),
+        modeOfTransport: modeOfTransport || undefined,
+        vehicleRegistration: vehicleRegistration.trim() || undefined,
+        vehicleExpiry: vehicleExpiry.trim() || undefined,
+        vehicleInsuranceUploaded: vehicleInsuranceUri ? 'Yes' : 'No',
+        password: password.trim(),
+        password_confirmation: confirmPassword.trim(),
+      },
+      vehicleInsuranceUri ? { vehicleInsuranceUri } : undefined,
+    );
   }, [
     password,
     confirmPassword,
@@ -90,7 +140,17 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
     vehicleRegistration,
     vehicleExpiry,
     vehicleInsuranceUri,
+    isSubmitting,
   ]);
+
+  const dismissAlert = useCallback(() => {
+    setBlockingAlert((prev) => {
+      if (prev?.focusPasswordOnOk === true) {
+        setTimeout(() => passwordRef.current?.focus(), 120);
+      }
+      return null;
+    });
+  }, []);
 
   return (
     <KeyboardAvoidingView
@@ -204,26 +264,19 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
                   value={vehicleRegistration}
                   onChangeText={setVehicleRegistration}
                   autoCapitalize="characters"
-                  returnKeyType="next"
+                  returnKeyType="done"
                   blurOnSubmit={false}
-                  onSubmitEditing={() => vehicleExpiryRef.current?.focus()}
+                  onSubmitEditing={() => Keyboard.dismiss()}
                 />
               </Pressable>
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry</Text>
-              <Pressable style={styles.input} onPress={() => vehicleExpiryRef.current?.focus()}>
-                <TextInput
-                  ref={vehicleExpiryRef}
-                  style={styles.inputField}
-                  placeholder="MM / DD / YYYY"
-                  placeholderTextColor="#9CA3AF"
-                  value={vehicleExpiry}
-                  onChangeText={setVehicleExpiry}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => passwordRef.current?.focus()}
-                />
-                <Feather name="calendar" size={20} color="#6B7280" style={styles.inputIconRight} />
-              </Pressable>
+              <ThemedDatePickerField
+                value={vehicleExpiry}
+                onChange={setVehicleExpiry}
+                minimumDate={vehicleExpiryMinDate}
+                maximumDate={vehicleExpiryMaxDate}
+                defaultPickerDate={vehicleExpiryDefaultDate}
+              />
               <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Insurance</Text>
               <TouchableOpacity
                 style={[styles.idDocUploadArea, vehicleInsuranceUri && styles.idDocUploadAreaFilled]}
@@ -246,16 +299,16 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
             <Pressable style={styles.modalOverlay} onPress={() => setShowTransportModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
-                  {TRANSPORT_OPTIONS.map((opt, idx) => (
+                  {transportOptions.map((opt, idx) => (
                     <TouchableOpacity
-                      key={opt}
-                      style={[styles.modalOption, idx === TRANSPORT_OPTIONS.length - 1 ? styles.modalOptionLast : null]}
+                      key={opt.value}
+                      style={[styles.modalOption, idx === transportOptions.length - 1 ? styles.modalOptionLast : null]}
                       onPress={() => {
-                        setModeOfTransport(opt);
+                        setModeOfTransport(opt.value);
                         setShowTransportModal(false);
                       }}
                     >
-                      <Text style={styles.modalOptionText}>{opt}</Text>
+                      <Text style={styles.modalOptionText}>{opt.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -315,12 +368,29 @@ export function Step4EmploymentDetails({ onNext }: Step4EmploymentDetailsProps) 
             </TouchableOpacity>
           </Pressable>
 
-          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={handleComplete}>
-            <Text style={styles.saveBtnText}>Complete</Text>
-            <Feather name="check" size={22} color="#FFFFFF" />
+          <TouchableOpacity
+            style={[styles.saveBtn, isSubmitting && { opacity: 0.65 }]}
+            activeOpacity={0.88}
+            onPress={handleComplete}
+            disabled={isSubmitting}
+          >
+            <Text style={styles.saveBtnText}>{isSubmitting ? 'Submitting…' : 'Complete'}</Text>
+            {!isSubmitting ? <Feather name="check" size={22} color="#FFFFFF" /> : null}
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <SweetAlert
+        visible={blockingAlert !== null}
+        title={blockingAlert?.title ?? ''}
+        message={blockingAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={dismissAlert}
+        onConfirm={dismissAlert}
+      />
     </KeyboardAvoidingView>
   );
 }

@@ -13,7 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Geolocation from 'react-native-geolocation-service';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
@@ -21,6 +21,7 @@ import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics'
 import { dashboardStyles } from '../../styles/styles';
 import { colors, spacing } from '../../theme/theme';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
+import { loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 
 const WORK_ZONE_CENTER = { lat: -33.8688, lng: 151.2093 }; // Sydney CBD - configure as needed
 const WORK_ZONE_RADIUS_M = 500;
@@ -84,6 +85,7 @@ export function DashboardScreen() {
   const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
   const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
   const mapLoadSeq = useRef(0);
+  const [welcomeName, setWelcomeName] = useState('there');
 
   const styles = dashboardStyles;
   const scrollBottomPad = floatingTabBarClearance(insets.bottom) + spacing.lg;
@@ -151,6 +153,15 @@ export function DashboardScreen() {
     fetchLocation();
   }, [fetchLocation]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void (async () => {
+        const p = await loadAccountProfile();
+        setWelcomeName(welcomeDisplayName(p));
+      })();
+    }, []),
+  );
+
   useEffect(() => {
     if (!userCoords || locationError || locationLoading) {
       return;
@@ -208,7 +219,7 @@ export function DashboardScreen() {
       >
         <View style={styles.greetingCard}>
           <Text style={styles.greetingText}>Welcome back,</Text>
-          <Text style={styles.userName}>Alex Rivera</Text>
+          <Text style={styles.userName}>{welcomeName}</Text>
         </View>
 
         <View style={[styles.clockInCard, isClockedIn ? styles.clockInCardIn : styles.clockInCardOut]}>
@@ -271,7 +282,10 @@ export function DashboardScreen() {
           </View>
 
           {locationLoading && (
-            <Text style={styles.locationAddress}>Getting location…</Text>
+            <View style={styles.locationLoadingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={[styles.locationAddress, styles.locationLoadingText]}>Getting location…</Text>
+            </View>
           )}
 
           {locationError && (
