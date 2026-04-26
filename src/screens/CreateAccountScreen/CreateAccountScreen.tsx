@@ -200,7 +200,12 @@ export function CreateAccountScreen() {
     try {
       const base = await loadAccountProfile();
       const { password: __p, password_confirmation: __c, ...withoutSecrets } = snap;
-      await saveAccountProfile({ ...base, ...withoutSecrets });
+      const localPhoto = registrationUploadsRef.current.profilePhotoUri?.trim() ?? null;
+      await saveAccountProfile({
+        ...base,
+        ...withoutSecrets,
+        profilePhotoLocalUri: localPhoto || null,
+      });
     } catch {
       /* still leave the app in a usable state */
     }

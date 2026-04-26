@@ -18,6 +18,9 @@ import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles, chatStyles } from '../../styles/styles';
 import { colors, spacing } from '../../theme/theme';
+import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage';
+import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
+import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
 export type ChatMessage = {
   id: string;
@@ -79,6 +82,7 @@ export function ChatScreen() {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
+  const headerProfile = useHeaderProfileSnapshot();
   const headerStyles = dashboardStyles;
   const styles = chatStyles;
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -186,7 +190,12 @@ export function ChatScreen() {
           accessibilityLabel="Open my profile"
         >
           <View style={headerStyles.profileAvatar}>
-            <Feather name="user" size={22} color={colors.primary} />
+            <ProfilePhotoAvatar
+              photoUri={getDisplayProfilePhotoUri(headerProfile)}
+              size={44}
+              iconSize={24}
+              iconColor={colors.primary}
+            />
           </View>
         </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Assistant</Text>

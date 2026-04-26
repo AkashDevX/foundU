@@ -22,8 +22,9 @@ import { CompanyPicker } from '../../components/CompanyPicker';
 import { SweetAlert } from '../../components/SweetAlert';
 import { useAppBootstrap } from '../../context/AppBootstrapContext';
 import { loginEmployee } from '../../services/loginApi';
-import { setAuthToken, setSessionAuthenticated } from '../../services/authSessionStorage';
+import { setAuthToken, setLastCompanySlug, setSessionAuthenticated } from '../../services/authSessionStorage';
 import { loadAccountProfile, saveAccountProfile } from '../../services/accountProfileStorage';
+import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { API_BASE_URL } from '../../config/api';
 
 type MissingField = 'company' | 'email' | 'password';
@@ -147,6 +148,7 @@ export function LoginScreen() {
       }
       await setAuthToken(result.token);
       await setSessionAuthenticated(true);
+      await setLastCompanySlug(slug);
       try {
         const existing = await loadAccountProfile();
         const org = companies.find((c) => c.slug === slug);
@@ -162,6 +164,12 @@ export function LoginScreen() {
               }
             : {}),
         });
+        // Prime `/api/v1/me` (including `profilePhotoUrl`) before Main so the header can show the photo
+        try {
+          await refreshAndCacheAccountProfileFromApi();
+        } catch {
+          /* best-effort */
+        }
       } catch {
         /* profile merge is best-effort */
       }

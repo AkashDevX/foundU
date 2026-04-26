@@ -24,6 +24,18 @@ export async function saveAccountProfile(profile: UserProfileSnapshot): Promise<
 }
 
 /** Greeting line under "Welcome back," — prefers full name from registration, then email local-part. */
+/** For avatars: use the server `profilePhotoUrl` if present, else the on-device `profilePhotoLocalUri` from registration. */
+export function getDisplayProfilePhotoUri(
+  profile: UserProfileSnapshot | null | undefined,
+): string | null {
+  if (!profile) return null;
+  const remote = profile.profilePhotoUrl?.trim();
+  if (remote) return remote;
+  const local = profile.profilePhotoLocalUri?.trim();
+  if (local) return local;
+  return null;
+}
+
 export function welcomeDisplayName(profile: UserProfileSnapshot): string {
   const full = profile.fullLegalName?.trim();
   if (full) return full;

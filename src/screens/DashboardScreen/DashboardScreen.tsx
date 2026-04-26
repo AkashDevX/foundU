@@ -21,7 +21,11 @@ import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics'
 import { dashboardStyles } from '../../styles/styles';
 import { colors, spacing } from '../../theme/theme';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
-import { loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
+import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
+import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
+import { getSessionAuthenticated } from '../../services/authSessionStorage';
+import type { UserProfileSnapshot } from '../../types/userProfile';
+import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
 const WORK_ZONE_CENTER = { lat: -33.8688, lng: 151.2093 }; // Sydney CBD - configure as needed
 const WORK_ZONE_RADIUS_M = 500;
@@ -86,6 +90,7 @@ export function DashboardScreen() {
   const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
   const mapLoadSeq = useRef(0);
   const [welcomeName, setWelcomeName] = useState('there');
+  const [assignmentProfile, setAssignmentProfile] = useState<UserProfileSnapshot | null>(null);
 
   const styles = dashboardStyles;
   const scrollBottomPad = floatingTabBarClearance(insets.bottom) + spacing.lg;
@@ -94,6 +99,16 @@ export function DashboardScreen() {
     () => (locationAddress ? shortLocationLabel(locationAddress) : null),
     [locationAddress],
   );
+
+  const assignedCoords = useMemo(() => {
+    const lat = Number(assignmentProfile?.assignedWorkLocationLat);
+    const lng = Number(assignmentProfile?.assignedWorkLocationLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  }, [assignmentProfile?.assignedWorkLocationLat, assignmentProfile?.assignedWorkLocationLng]);
+
+  const mapTargetCoords = assignedCoords ?? userCoords;
+  const mapTargetAddress = assignmentProfile?.assignedWorkLocationAddress ?? locationAddress;
 
   const openAppSettings = useCallback(() => {
     Linking.openSettings();
@@ -156,14 +171,19 @@ export function DashboardScreen() {
   useFocusEffect(
     useCallback(() => {
       void (async () => {
-        const p = await loadAccountProfile();
-        setWelcomeName(welcomeDisplayName(p));
+        const local = await loadAccountProfile();
+        setWelcomeName(welcomeDisplayName(local));
+        setAssignmentProfile(local);
+        const signedIn = await getSessionAuthenticated();
+        if (!signedIn) return;
+        const api = await refreshAndCacheAccountProfileFromApi();
+        if (api.ok) setAssignmentProfile(api.profile);
       })();
     }, []),
   );
 
   useEffect(() => {
-    if (!userCoords || locationError || locationLoading) {
+    if (!mapTargetCoords || locationError || locationLoading) {
       return;
     }
 
@@ -171,7 +191,7 @@ export function DashboardScreen() {
     setMapPreviewLoading(true);
     setMapPreview(null);
 
-    loadOpenStreetMapPreview(userCoords.lat, userCoords.lng)
+    loadOpenStreetMapPreview(mapTargetCoords.lat, mapTargetCoords.lng)
       .then((result) => {
         if (seq !== mapLoadSeq.current) return;
         setMapPreview(result);
@@ -180,7 +200,7 @@ export function DashboardScreen() {
         if (seq !== mapLoadSeq.current) return;
         setMapPreviewLoading(false);
       });
-  }, [userCoords, locationError, locationLoading]);
+  }, [mapTargetCoords, locationError, locationLoading]);
 
   const handleClockIn = () => {
     setIsClockedIn((prev) => !prev);
@@ -197,7 +217,12 @@ export function DashboardScreen() {
           accessibilityLabel="Open my profile"
         >
           <View style={styles.profileAvatar}>
-            <Feather name="user" size={22} color={colors.primary} />
+            <ProfilePhotoAvatar
+              photoUri={getDisplayProfilePhotoUri(assignmentProfile)}
+              size={44}
+              iconSize={24}
+              iconColor={colors.primary}
+            />
           </View>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Workforce</Text>
@@ -260,13 +285,19 @@ export function DashboardScreen() {
           </Pressable>
           <View style={[styles.shiftPill, isClockedIn ? styles.shiftPillIn : styles.shiftPillOut]}>
             <Feather name="clock" size={20} color="#FFFFFF" />
-            <Text style={styles.shiftPillText}>Shift starts at 09:00 AM</Text>
+            <Text style={styles.shiftPillText}>
+              {assignmentProfile?.assignedShiftStartTime
+                ? `Shift starts at ${assignmentProfile.assignedShiftStartTime}`
+                : 'Shift start time unavailable'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.locationCard}>
           <View style={styles.locationCardHeaderRow}>
-            <Text style={styles.locationHeading}>Current location</Text>
+            <Text style={styles.locationHeading}>
+              {assignedCoords ? 'Assigned work location' : 'Current location'}
+            </Text>
             {!locationLoading && isInZone !== null && (
               <View style={isInZone ? styles.inZoneBadge : styles.outZoneBadge}>
                 <Feather
@@ -307,30 +338,40 @@ export function DashboardScreen() {
             </View>
           )}
 
-          {locationAddress && !locationLoading && !locationError && (
+          {mapTargetAddress && !locationLoading && !locationError && (
             <>
-              {locationLabel ? (
+              {assignmentProfile?.assignedWorkLocationName ? (
+                <Text style={styles.locationShortName}>{assignmentProfile.assignedWorkLocationName}</Text>
+              ) : locationLabel ? (
                 <Text style={styles.locationShortName}>{locationLabel}</Text>
               ) : null}
-              <Text style={styles.locationAddress}>{locationAddress}</Text>
-              {userCoords ? (
+              <Text style={styles.locationAddress}>{mapTargetAddress}</Text>
+              {mapTargetCoords ? (
                 <View style={styles.locationCoordsRow}>
                   <Feather name="map-pin" size={14} color={colors.primary} />
                   <Text style={styles.locationCoordsText}>
-                    {userCoords.lat.toFixed(5)}, {userCoords.lng.toFixed(5)}
+                    {mapTargetCoords.lat.toFixed(5)}, {mapTargetCoords.lng.toFixed(5)}
+                  </Text>
+                </View>
+              ) : null}
+              {assignmentProfile?.assignedDepartment ? (
+                <View style={styles.locationCoordsRow}>
+                  <Feather name="briefcase" size={14} color={colors.primary} />
+                  <Text style={styles.locationCoordsText}>
+                    Department: {assignmentProfile.assignedDepartment}
                   </Text>
                 </View>
               ) : null}
             </>
           )}
 
-          {userCoords && !locationLoading && !locationError && (
+          {mapTargetCoords && !locationLoading && !locationError && (
             <TouchableOpacity
               style={styles.locationMapTouchable}
               activeOpacity={0.92}
-              onPress={() => openMapsAt(userCoords.lat, userCoords.lng)}
+              onPress={() => openMapsAt(mapTargetCoords.lat, mapTargetCoords.lng)}
               accessibilityRole="button"
-              accessibilityLabel="Open map at your location"
+              accessibilityLabel="Open map at assigned location"
             >
               {mapPreviewLoading ? (
                 <View style={styles.locationMapLoadingBox}>

@@ -12,6 +12,9 @@ import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { dashboardStyles, tasksStyles } from '../../styles/styles';
 import { colors } from '../../theme/theme';
+import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage';
+import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
+import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
 type TaskPriority = 'high' | 'medium' | 'low';
 
@@ -112,6 +115,7 @@ export function TasksScreen() {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
+  const headerProfile = useHeaderProfileSnapshot();
   const headerStyles = dashboardStyles;
   const styles = tasksStyles;
   const [tasks, setTasks] = useState<TaskItem[]>(INITIAL_TASKS);
@@ -142,7 +146,12 @@ export function TasksScreen() {
           accessibilityLabel="Open my profile"
         >
           <View style={headerStyles.profileAvatar}>
-            <Feather name="user" size={22} color={colors.primary} />
+            <ProfilePhotoAvatar
+              photoUri={getDisplayProfilePhotoUri(headerProfile)}
+              size={44}
+              iconSize={24}
+              iconColor={colors.primary}
+            />
           </View>
         </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Tasks</Text>

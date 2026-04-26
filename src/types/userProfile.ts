@@ -1,6 +1,6 @@
 /**
  * Snapshot of registration / account fields shown on My Profile.
- * Populated from Create Account steps and persisted locally until an API exists.
+ * Filled from the Create Account wizard, `GET /api/v1/me`, and local cache.
  */
 export type UserProfileSnapshot = {
   /** Master registry slug from GET /api/v1/bootstrap (same as X-Company-Slug). */
@@ -8,6 +8,40 @@ export type UserProfileSnapshot = {
   registrationCompanySlug?: string | null;
   registrationCompanyAppKey?: string | null;
   companyName?: string | null;
+  /** Assignment details from tenant/company DB (active employee roster). */
+  assignedDepartment?: string;
+  assignedShiftName?: string;
+  assignedShiftStatus?: string;
+  assignedShiftDate?: string;
+  assignedShiftStartTime?: string;
+  assignedShiftEndTime?: string;
+  assignedWorkLocationName?: string;
+  assignedWorkLocationAddress?: string;
+  assignedWorkLocationLat?: string;
+  assignedWorkLocationLng?: string;
+  /** Department code from roster (tenant `departments.code`). */
+  assignedDepartmentCode?: string;
+  /** Shift template breaks line from tenant `shifts.breaks_summary`. */
+  assignedShiftBreaksSummary?: string;
+  /** Shift template notes from tenant `shifts.notes`. */
+  assignedShiftNotes?: string;
+  /** Site / location notes from tenant `work_locations.notes`. */
+  assignedWorkLocationNotes?: string;
+  /** Administrator notes on the employee assignment (`employees.assignment_notes`). */
+  assignmentNotes?: string;
+  /** Tenant employee row — useful for status badges. */
+  employmentStatus?: string;
+  jobTitle?: string;
+  /**
+   * Profile headshot: absolute `http(s)` URL from the API, or a path the app resolves against `API_BASE_URL`.
+   * Omitted/empty when the user has not uploaded a photo.
+   */
+  profilePhotoUrl?: string | null;
+  /**
+   * On-device `file://` or `content://` URI of the last chosen profile image (e.g. after register), until the
+   * server provides `profilePhotoUrl` — used so the header shows your photo when the API omits a URL.
+   */
+  profilePhotoLocalUri?: string | null;
   email?: string;
   phone?: string;
   fullLegalName?: string;

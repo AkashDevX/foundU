@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,15 +7,96 @@ import {
   ScrollView,
   Pressable,
   StatusBar,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { dashboardStyles } from '../../styles/styles';
 import { colors, fontFamily, spacing } from '../../theme/theme';
+import { getDisplayProfilePhotoUri, loadAccountProfile } from '../../services/accountProfileStorage';
+import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
+import { getSessionAuthenticated } from '../../services/authSessionStorage';
+import type { UserProfileSnapshot } from '../../types/userProfile';
+import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
 type TabType = 'Upcoming' | 'History' | 'Pending';
+
+function formatEmploymentLabel(status: string | undefined): string {
+  if (!status || status.trim() === '') return 'Status unknown';
+  const s = status.toLowerCase();
+  if (s === 'active') return 'Active';
+  if (s === 'pending') return 'Pending approval';
+  if (s === 'declined' || s === 'rejected') return 'Not approved';
+  return status.replace(/_/g, ' ');
+}
+
+function departmentLine(profile: UserProfileSnapshot): string {
+  const name = profile.assignedDepartment?.trim();
+  const code = profile.assignedDepartmentCode?.trim();
+  if (name && code) return `${name} (${code})`;
+  if (name) return name;
+  if (code) return code;
+  return 'Not assigned';
+}
+
+function shiftTimeWindow(profile: UserProfileSnapshot): string {
+  const start = profile.assignedShiftStartTime?.trim();
+  const end = profile.assignedShiftEndTime?.trim();
+  if (start && end) return `${start} – ${end}`;
+  if (start) return `From ${start}`;
+  if (end) return `Until ${end}`;
+  return 'Times not set';
+}
+
+function parseWorkCoords(profile: UserProfileSnapshot | null): { lat: number; lng: number } | null {
+  if (!profile) return null;
+  const lat = Number(profile.assignedWorkLocationLat);
+  const lng = Number(profile.assignedWorkLocationLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function openMapsAt(lat: number, lng: number): void {
+  const osm = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
+  Linking.openURL(osm).catch(() => {
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`);
+  });
+}
+
+function ShiftInfoRow({
+  icon,
+  label,
+  value,
+  muted,
+}: {
+  icon: React.ComponentProps<typeof Feather>['name'];
+  label: string;
+  value: string;
+  muted?: boolean;
+}) {
+  if (!value || value.trim() === '') return null;
+  return (
+    <View style={s.infoRow}>
+      <Feather name={icon} size={16} color={muted ? '#9CA3AF' : '#6B7280'} />
+      <View style={s.infoRowText}>
+        <Text style={s.infoRowLabel}>{label}</Text>
+        <Text style={[s.infoRowValue, muted && s.infoRowValueMuted]}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function NotesSection({ title, body }: { title: string; body: string | undefined }) {
+  if (!body || body.trim() === '') return null;
+  return (
+    <View style={s.notesSection}>
+      <Text style={s.notesSectionTitle}>{title}</Text>
+      <Text style={s.notesSectionBody}>{body.trim()}</Text>
+    </View>
+  );
+}
 
 export function ShiftsScreen() {
   const navigation = useNavigation<any>();
@@ -23,7 +104,25 @@ export function ShiftsScreen() {
   const insets = useSafeAreaInsets();
   const headerStyles = dashboardStyles;
   const [activeTab, setActiveTab] = useState<TabType>('Upcoming');
-  const [elapsed, setElapsed] = useState({ h: 4, m: 18, s: 22 });
+  const [elapsed, setElapsed] = useState({ h: 0, m: 0, s: 0 });
+  const [profile, setProfile] = useState<UserProfileSnapshot | null>(null);
+
+  const refreshProfile = useCallback(() => {
+    void (async () => {
+      const local = await loadAccountProfile();
+      setProfile(local);
+      const signedIn = await getSessionAuthenticated();
+      if (!signedIn) return;
+      const api = await refreshAndCacheAccountProfileFromApi();
+      if (api.ok) setProfile(api.profile);
+    })();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfile();
+    }, [refreshProfile]),
+  );
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -44,7 +143,177 @@ export function ShiftsScreen() {
     return () => clearInterval(id);
   }, []);
 
+  const employmentStatus = profile?.employmentStatus?.toLowerCase() ?? '';
+  const isPendingApproval = employmentStatus === 'pending';
+  const isActiveEmployee = employmentStatus === 'active';
+  const workCoords = parseWorkCoords(profile);
+
+  const rosterTitle = !profile
+    ? 'Your assignment'
+    : profile.assignedShiftName?.trim() ||
+      profile.jobTitle?.trim() ||
+      profile.companyName?.trim() ||
+      'Your assignment';
+
+  const sessionHeadline = !profile
+    ? 'Loading…'
+    : profile.jobTitle?.trim() ||
+      profile.assignedShiftName?.trim() ||
+      profile.companyName?.trim() ||
+      'Your workplace';
+
+  const sessionSubline = !profile
+    ? ''
+    : [
+        profile.companyName?.trim(),
+        departmentLine(profile) !== 'Not assigned' ? departmentLine(profile) : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
   const timerStr = `${String(elapsed.h).padStart(2, '0')}:${String(elapsed.m).padStart(2, '0')}:${String(elapsed.s).padStart(2, '0')}`;
+
+  const hasExtraNotes =
+    !!profile?.assignedShiftBreaksSummary?.trim() ||
+    !!profile?.assignmentNotes?.trim() ||
+    !!profile?.assignedShiftNotes?.trim() ||
+    !!profile?.assignedWorkLocationNotes?.trim();
+
+  const upcomingBody = (
+    <>
+      {isPendingApproval ? (
+        <View style={s.pendingBanner}>
+          <Feather name="clock" size={22} color="#92400E" />
+          <Text style={s.pendingBannerText}>
+            Your registration is still being reviewed. Shift and site details will appear here after your organization
+            approves your account.
+          </Text>
+        </View>
+      ) : null}
+
+      <Text style={s.sectionLabel}>CURRENT SESSION</Text>
+      <View style={[s.sessionCard, isPendingApproval && s.sessionCardMuted]}>
+        <View style={s.sessionCardHeader}>
+          <View style={[s.statusPill, isActiveEmployee ? s.statusPillActive : s.statusPillNeutral]}>
+            <Text style={[s.statusPillText, isActiveEmployee ? s.statusPillTextActive : s.statusPillTextNeutral]}>
+              {formatEmploymentLabel(profile?.employmentStatus).toUpperCase()}
+            </Text>
+          </View>
+          <View style={s.sessionIconWrap}>
+            <Feather name="briefcase" size={24} color="#FFFFFF" strokeWidth={2} />
+          </View>
+        </View>
+        <Text style={s.sessionJobTitle}>{sessionHeadline}</Text>
+        {sessionSubline ? <Text style={s.sessionMetaLine}>{sessionSubline}</Text> : null}
+        <Text style={s.sessionStartTime}>
+          {isPendingApproval
+            ? 'You will be able to clock in after approval.'
+            : profile?.assignedShiftStartTime
+              ? `Scheduled start: ${profile.assignedShiftStartTime}${profile.assignedShiftEndTime ? ` · End: ${profile.assignedShiftEndTime}` : ''}`
+              : 'No shift start time on file — ask your manager if this looks wrong.'}
+        </Text>
+        {!isPendingApproval ? (
+          <View style={s.sessionFooter}>
+            <View>
+              <Text style={s.durationLabel}>SESSION TIMER (LOCAL)</Text>
+              <Text style={s.durationTimer}>{timerStr}</Text>
+            </View>
+            <Pressable style={s.clockOutBtn} disabled>
+              <Text style={s.clockOutBtnText}>Clock Out</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+
+      {!isPendingApproval ? (
+        <>
+          <View style={s.scheduleHeader}>
+            <Text style={s.sectionLabel}>YOUR ROSTER</Text>
+          </View>
+
+          <View style={s.shiftCard}>
+            <View style={s.shiftCardBadgeConfirmed}>
+              <Text style={s.shiftCardBadgeTextConfirmed}>FROM WORKPLACE</Text>
+            </View>
+            <Text style={s.shiftCardTitle}>{rosterTitle}</Text>
+
+            <ShiftInfoRow icon="calendar" label="Effective from" value={profile?.assignedShiftDate ?? ''} />
+            <ShiftInfoRow icon="clock" label="Shift hours" value={shiftTimeWindow(profile ?? {})} />
+            <ShiftInfoRow icon="briefcase" label="Department" value={departmentLine(profile ?? {})} />
+            <ShiftInfoRow icon="user" label="Role" value={profile?.jobTitle?.trim() ?? ''} />
+            <ShiftInfoRow
+              icon="map-pin"
+              label="Work site"
+              value={
+                profile?.assignedWorkLocationName?.trim()
+                  ? `${profile.assignedWorkLocationName}${profile?.assignedWorkLocationAddress ? ` — ${profile.assignedWorkLocationAddress}` : ''}`
+                  : profile?.assignedWorkLocationAddress?.trim() ?? ''
+              }
+            />
+
+            {workCoords ? (
+              <TouchableOpacity
+                style={s.mapsBtn}
+                onPress={() => openMapsAt(workCoords.lat, workCoords.lng)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Open assigned work location in maps"
+              >
+                <Feather name="navigation" size={18} color={colors.white} />
+                <Text style={s.mapsBtnText}>
+                  Open site on map ({workCoords.lat.toFixed(5)}, {workCoords.lng.toFixed(5)})
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {profile?.hoursPerWeek?.trim() ? (
+              <ShiftInfoRow icon="pie-chart" label="Contracted hours / week" value={profile.hoursPerWeek.trim()} />
+            ) : null}
+          </View>
+
+          {hasExtraNotes ? (
+            <View style={s.shiftCard}>
+              <Text style={s.shiftCardTitle}>Breaks & notes</Text>
+              <NotesSection title="Breaks" body={profile?.assignedShiftBreaksSummary} />
+              <NotesSection title="From your employer" body={profile?.assignmentNotes} />
+              <NotesSection title="Shift notes" body={profile?.assignedShiftNotes} />
+              <NotesSection title="Site notes" body={profile?.assignedWorkLocationNotes} />
+            </View>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+
+  const historyBody = (
+    <View style={s.emptyCard}>
+      <Feather name="archive" size={36} color="#9CA3AF" />
+      <Text style={s.emptyTitle}>No shift history yet</Text>
+      <Text style={s.emptyHint}>
+        Completed shifts will list here once your workplace connects time & attendance to this app.
+      </Text>
+    </View>
+  );
+
+  const pendingTabBody =
+    isPendingApproval ? (
+      <View style={s.emptyCard}>
+        <Feather name="inbox" size={36} color="#D97706" />
+        <Text style={s.emptyTitle}>Awaiting organization approval</Text>
+        <Text style={s.emptyHint}>
+          There are no pending shift offers until your account is active. Check with your administrator if you need
+          help.
+        </Text>
+      </View>
+    ) : (
+      <View style={s.emptyCard}>
+        <Feather name="check-circle" size={36} color="#059669" />
+        <Text style={s.emptyTitle}>Nothing pending</Text>
+        <Text style={s.emptyHint}>
+          You have no outstanding shift requests. Your current roster is under &quot;Upcoming&quot;.
+        </Text>
+      </View>
+    );
 
   return (
     <View style={[s.container, { paddingTop: insets.top, paddingBottom: 100 }]}>
@@ -57,7 +326,12 @@ export function ShiftsScreen() {
           accessibilityLabel="Open my profile"
         >
           <View style={headerStyles.profileAvatar}>
-            <Feather name="user" size={22} color={colors.primary} />
+            <ProfilePhotoAvatar
+              photoUri={getDisplayProfilePhotoUri(profile)}
+              size={44}
+              iconSize={24}
+              iconColor={colors.primary}
+            />
           </View>
         </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Shifts</Text>
@@ -79,104 +353,15 @@ export function ShiftsScreen() {
               style={[s.segmentedTab, activeTab === tab && s.segmentedTabActive]}
               onPress={() => setActiveTab(tab)}
             >
-              <Text
-                style={[
-                  s.segmentedTabText,
-                  activeTab === tab && s.segmentedTabTextActive,
-                ]}
-              >
-                {tab}
-              </Text>
+              <Text style={[s.segmentedTabText, activeTab === tab && s.segmentedTabTextActive]}>{tab}</Text>
             </Pressable>
           ))}
         </View>
 
-        <ScrollView
-          style={s.scroll}
-          contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-        {/* CURRENT SESSION */}
-        <Text style={s.sectionLabel}>CURRENT SESSION</Text>
-        <View style={s.sessionCard}>
-          <View style={s.sessionCardHeader}>
-            <View style={s.inProgressBadge}>
-              <View style={s.inProgressDot} />
-              <Text style={s.inProgressText}>IN PROGRESS</Text>
-            </View>
-            <View style={s.sessionIconWrap}>
-              <Feather name="user" size={24} color="#FFFFFF" strokeWidth={2} />
-            </View>
-          </View>
-          <Text style={s.sessionJobTitle}>Northside Construction</Text>
-          <Text style={s.sessionStartTime}>Started at 08:42 AM Today</Text>
-          <View style={s.sessionFooter}>
-            <View>
-              <Text style={s.durationLabel}>CURRENT DURATION</Text>
-              <Text style={s.durationTimer}>{timerStr}</Text>
-            </View>
-            <Pressable style={s.clockOutBtn}>
-              <Text style={s.clockOutBtnText}>Clock Out</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {/* SCHEDULE */}
-        <View style={s.scheduleHeader}>
-          <Text style={s.sectionLabel}>SCHEDULE</Text>
-          <TouchableOpacity>
-            <Text style={s.viewCalendarLink}>View Calendar</Text>
-          </TouchableOpacity>
-        </View>
-        {/* Confirmed Shift Card */}
-        <View style={s.shiftCard}>
-          <View style={s.shiftCardBadgeConfirmed}>
-            <Text style={s.shiftCardBadgeTextConfirmed}>CONFIRMED</Text>
-          </View>
-          <Text style={s.shiftCardTitle}>Harbor Logistics</Text>
-          <View style={s.shiftCardRow}>
-            <Feather name="calendar" size={16} color="#6B7280" />
-            <Text style={s.shiftCardInfo}>
-              Mon, Oct 23 • 09:00 AM - 05:00 PM
-            </Text>
-          </View>
-          <View style={s.shiftCardRow}>
-            <Feather name="map-pin" size={16} color="#6B7280" />
-            <Text style={s.shiftCardInfo}>882 Shipping Way, Port District</Text>
-          </View>
-          <View style={s.shiftCardFooter}>
-            <View style={s.avatarRow}>
-              <View style={s.avatar} />
-              <View style={s.avatarMore}>
-                <Text style={s.avatarMoreText}>+3</Text>
-              </View>
-            </View>
-            <TouchableOpacity style={s.viewDetailsBtn}>
-              <Text style={s.viewDetailsText}>View Details</Text>
-              <Feather name="chevron-right" size={16} color="#004B8D" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Pending Shift Card */}
-        <View style={s.shiftCardPending}>
-          <View style={s.shiftCardBadgePending}>
-            <Text style={s.shiftCardBadgeTextPending}>PENDING</Text>
-          </View>
-          <Text style={s.shiftCardTitlePending}>City Medical Plaza</Text>
-          <View style={s.shiftCardRow}>
-            <Feather name="calendar" size={16} color="#9CA3AF" />
-            <Text style={s.shiftCardInfoPending}>
-              Tue, Oct 24 • 10:00 AM - 06:00 PM
-            </Text>
-          </View>
-          <View style={s.shiftCardRow}>
-            <Feather name="map-pin" size={16} color="#9CA3AF" />
-            <Text style={s.shiftCardInfoPending}>
-              402 Health Blvd, Central Wing
-            </Text>
-          </View>
-        </View>
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+          {activeTab === 'Upcoming' ? upcomingBody : null}
+          {activeTab === 'History' ? historyBody : null}
+          {activeTab === 'Pending' ? pendingTabBody : null}
         </ScrollView>
       </View>
     </View>
@@ -232,6 +417,24 @@ const s = StyleSheet.create({
     color: '#9CA3AF',
     marginBottom: 12,
   },
+  pendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 16,
+    padding: spacing.lg,
+    marginBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(217,119,6,0.35)',
+  },
+  pendingBannerText: {
+    flex: 1,
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: '#92400E',
+    lineHeight: 20,
+  },
   sessionCard: {
     backgroundColor: '#0056A4',
     borderRadius: 20,
@@ -239,32 +442,36 @@ const s = StyleSheet.create({
     marginBottom: 28,
     overflow: 'hidden',
   },
+  sessionCardMuted: {
+    opacity: 0.92,
+  },
   sessionCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 16,
   },
-  inProgressBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#D4F7D4',
+  statusPill: {
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 20,
-    gap: 6,
   },
-  inProgressDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#1A531A',
+  statusPillActive: {
+    backgroundColor: '#D4F7D4',
   },
-  inProgressText: {
+  statusPillNeutral: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  statusPillText: {
     fontFamily: fontFamily.bold,
     fontSize: 11,
     letterSpacing: 0.6,
+  },
+  statusPillTextActive: {
     color: '#1A531A',
+  },
+  statusPillTextNeutral: {
+    color: '#FFFFFF',
   },
   sessionIconWrap: {
     width: 40,
@@ -280,11 +487,19 @@ const s = StyleSheet.create({
     color: colors.white,
     marginBottom: 4,
   },
+  sessionMetaLine: {
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.9)',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
   sessionStartTime: {
     fontFamily: fontFamily.regular,
     fontSize: 14,
     color: 'rgba(255,255,255,0.85)',
     marginBottom: 16,
+    lineHeight: 20,
   },
   sessionFooter: {
     flexDirection: 'row',
@@ -311,6 +526,7 @@ const s = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 24,
+    opacity: 0.85,
   },
   clockOutBtnText: {
     fontFamily: fontFamily.bold,
@@ -323,11 +539,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  viewCalendarLink: {
-    fontFamily: fontFamily.semiBold,
-    fontSize: 14,
-    color: '#004B8D',
-  },
   shiftCard: {
     backgroundColor: colors.white,
     borderRadius: 16,
@@ -338,12 +549,6 @@ const s = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 10,
     elevation: 3,
-  },
-  shiftCardPending: {
-    backgroundColor: '#E5E7EB',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 12,
   },
   shiftCardBadgeConfirmed: {
     alignSelf: 'flex-end',
@@ -359,93 +564,96 @@ const s = StyleSheet.create({
     letterSpacing: 0.5,
     color: '#1E40AF',
   },
-  shiftCardBadgePending: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#D1D5DB',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  shiftCardBadgeTextPending: {
-    fontFamily: fontFamily.bold,
-    fontSize: 10,
-    letterSpacing: 0.5,
-    color: '#6B7280',
-  },
   shiftCardTitle: {
     fontFamily: fontFamily.bold,
     fontSize: 17,
     color: colors.text.primary,
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  shiftCardTitlePending: {
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
+  },
+  infoRowText: {
+    flex: 1,
+  },
+  infoRowLabel: {
     fontFamily: fontFamily.bold,
-    fontSize: 17,
-    color: '#6B7280',
-    marginBottom: 10,
-  },
-  shiftCardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  shiftCardInfo: {
-    fontFamily: fontFamily.regular,
-    fontSize: 14,
-    color: '#6B7280',
-    flex: 1,
-  },
-  shiftCardInfoPending: {
-    fontFamily: fontFamily.regular,
-    fontSize: 14,
+    fontSize: 11,
+    letterSpacing: 0.5,
     color: '#9CA3AF',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  infoRowValue: {
+    fontFamily: fontFamily.regular,
+    fontSize: 15,
+    color: colors.text.primary,
+    lineHeight: 22,
+  },
+  infoRowValueMuted: {
+    color: '#9CA3AF',
+  },
+  mapsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  mapsBtnText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    color: colors.white,
     flex: 1,
   },
-  shiftCardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 14,
-    paddingTop: 14,
+  notesSection: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
   },
-  avatarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#9CA3AF',
-  },
-  avatarMore: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#D1D5DB',
-    marginLeft: -8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
-  avatarMoreText: {
-    fontFamily: fontFamily.regular,
-    fontSize: 11,
+  notesSectionTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: 12,
     color: '#6B7280',
+    marginBottom: 6,
   },
-  viewDetailsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  viewDetailsText: {
-    fontFamily: fontFamily.semiBold,
+  notesSectionBody: {
+    fontFamily: fontFamily.regular,
     fontSize: 14,
-    color: '#004B8D',
+    color: colors.text.primary,
+    lineHeight: 21,
+  },
+  emptyCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.xxl,
+    alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+  },
+  emptyTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: 17,
+    color: colors.text.primary,
+    marginTop: spacing.md,
+    textAlign: 'center',
+  },
+  emptyHint: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.secondary,
+    marginTop: spacing.sm,
+    textAlign: 'center',
+    lineHeight: 21,
   },
 });

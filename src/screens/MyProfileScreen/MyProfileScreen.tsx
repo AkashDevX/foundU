@@ -1,20 +1,23 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   StatusBar,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { createAccountScreenStyles, myProfileScreenStyles } from '../../styles/styles';
-import { loadAccountProfile } from '../../services/accountProfileStorage';
+import { getDisplayProfilePhotoUri, loadAccountProfile } from '../../services/accountProfileStorage';
+import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { getSessionAuthenticated } from '../../services/authSessionStorage';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { colors, spacing } from '../../theme/theme';
 import { FullScreenLoader } from '../../components/FullScreenLoader';
+import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
 function display(v: string | undefined | null): string {
   if (v == null || String(v).trim() === '') return '—';
@@ -69,19 +72,41 @@ export function MyProfileScreen() {
   const mp = myProfileScreenStyles;
   const [profile, setProfile] = useState<UserProfileSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sessionAuthenticated, setSessionAuthenticated] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const isFirstLoadRef = useRef(true);
 
   const refresh = useCallback(() => {
-    setLoading(true);
     void (async () => {
-      const signedIn = await getSessionAuthenticated();
-      setSessionAuthenticated(signedIn);
-      if (!signedIn) {
-        setProfile({});
-        return;
+      const first = isFirstLoadRef.current;
+      if (first) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
       }
-      setProfile(await loadAccountProfile());
-    })().finally(() => setLoading(false));
+      try {
+        const signedIn = await getSessionAuthenticated();
+        setSessionAuthenticated(signedIn);
+        if (!signedIn) {
+          setProfile({});
+          setSyncError(null);
+          return;
+        }
+        const api = await refreshAndCacheAccountProfileFromApi();
+        if (api.ok) {
+          setProfile(api.profile);
+          setSyncError(null);
+        } else {
+          setSyncError(api.message);
+          setProfile(await loadAccountProfile());
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+        isFirstLoadRef.current = false;
+      }
+    })();
   }, []);
 
   useFocusEffect(
@@ -121,11 +146,34 @@ export function MyProfileScreen() {
           }}
           keyboardShouldPersistTaps="always"
           showsVerticalScrollIndicator
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              colors={['#0056D2']}
+              tintColor="#0056D2"
+            />
+          }
         >
+          {sessionAuthenticated && syncError ? (
+            <View style={mp.syncBanner}>
+              <Feather name="alert-triangle" size={18} color="#D97706" style={{ marginTop: 1 }} />
+              <Text style={mp.syncBannerText}>
+                Could not load the latest profile from the server. Showing saved details. Pull down to retry.
+                {'\n\n'}
+                {syncError}
+              </Text>
+            </View>
+          ) : null}
           <View style={mp.heroCard}>
             <View style={mp.heroAvatarOuter}>
               <View style={mp.heroAvatar}>
-                <Feather name="user" size={42} color="#1D4ED8" />
+                <ProfilePhotoAvatar
+                  photoUri={getDisplayProfilePhotoUri(profile)}
+                  size={94}
+                  iconSize={42}
+                  iconColor="#1D4ED8"
+                />
               </View>
             </View>
             <Text style={mp.heroName}>{display(profile.fullLegalName)}</Text>
@@ -134,12 +182,16 @@ export function MyProfileScreen() {
             </Text>
             <View style={mp.heroBadge}>
               <Feather
-                name={sessionAuthenticated ? 'check-circle' : 'info'}
+                name={sessionAuthenticated ? (syncError ? 'info' : 'check-circle') : 'info'}
                 size={16}
-                color={sessionAuthenticated ? '#059669' : '#6B7280'}
+                color={sessionAuthenticated ? (syncError ? '#6B7280' : '#059669') : '#6B7280'}
               />
               <Text style={mp.heroBadgeText}>
-                {sessionAuthenticated ? 'Details on file' : 'Sign in to load your profile'}
+                {sessionAuthenticated
+                  ? syncError
+                    ? 'Saved on this device'
+                    : 'Synced from workplace'
+                  : 'Sign in to load your profile'}
               </Text>
             </View>
           </View>
