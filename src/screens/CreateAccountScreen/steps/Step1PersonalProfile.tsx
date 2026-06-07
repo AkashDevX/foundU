@@ -28,6 +28,7 @@ import {
   formatDateToDisplay,
   parseDisplayDateToDate,
 } from '../../../components/ThemedDatePickerField';
+import { isBlank, missingFieldsAlert } from '../validation';
 
 interface Step1PersonalProfileProps {
   onNext: RegistrationWizardNext;
@@ -59,7 +60,11 @@ export function Step1PersonalProfile({
   const [showMaritalModal, setShowMaritalModal] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressSearchLoading, setAddressSearchLoading] = useState(false);
-  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    listItems?: string[];
+  } | null>(null);
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | null>(() => initialProfilePhotoUri ?? null);
 
   useEffect(() => {
@@ -105,13 +110,28 @@ export function Step1PersonalProfile({
   }, []);
 
   const submitStep1 = useCallback(() => {
-    if (!companySlug) {
+    const missing: string[] = [];
+    if (!companySlug) missing.push('Company');
+    if (!profilePhotoUri) missing.push('Profile photo');
+    if (isBlank(email)) missing.push('Email address');
+    if (isBlank(phone)) missing.push('Phone number');
+    if (isBlank(fullLegalName)) missing.push('Full legal name');
+    if (!dobDate) missing.push('Date of birth');
+    if (!sex) missing.push('Sex');
+    if (isBlank(maritalStatus)) missing.push('Marital status');
+    if (isBlank(address)) missing.push('Address');
+    if (isBlank(emergencyContactName)) missing.push('Emergency contact name');
+    if (isBlank(emergencyContactPhone)) missing.push('Emergency contact phone');
+    if (isBlank(emergencyContactRelationship)) missing.push('Emergency contact relationship');
+
+    if (missing.length > 0) {
       setBlockingAlert({
-        title: 'Select company',
-        message: 'Choose your organization so your profile is saved to the correct workplace.',
+        title: 'Complete required fields',
+        ...missingFieldsAlert(missing),
       });
       return;
     }
+
     const org = companies.find((c) => c.slug === companySlug);
     if (!org) {
       setBlockingAlert({
@@ -210,6 +230,20 @@ export function Step1PersonalProfile({
       }
     }, 200);
   }, []);
+
+  const step1Complete =
+    Boolean(companySlug) &&
+    Boolean(profilePhotoUri) &&
+    !isBlank(email) &&
+    !isBlank(phone) &&
+    !isBlank(fullLegalName) &&
+    Boolean(dobDate) &&
+    Boolean(sex) &&
+    !isBlank(maritalStatus) &&
+    !isBlank(address) &&
+    !isBlank(emergencyContactName) &&
+    !isBlank(emergencyContactPhone) &&
+    !isBlank(emergencyContactRelationship);
 
   return (
     <>
@@ -482,7 +516,11 @@ export function Step1PersonalProfile({
             />
           </Pressable>
 
-          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={submitStep1}>
+          <TouchableOpacity
+            style={[styles.saveBtn, !step1Complete && { opacity: 0.6 }]}
+            activeOpacity={0.88}
+            onPress={submitStep1}
+          >
             <Text style={styles.saveBtnText}>Save & Continue</Text>
             <Feather name="arrow-right" size={22} color="#FFFFFF" />
           </TouchableOpacity>
@@ -494,6 +532,7 @@ export function Step1PersonalProfile({
         visible={blockingAlert !== null}
         title={blockingAlert?.title ?? ''}
         message={blockingAlert?.message ?? ''}
+        listItems={blockingAlert?.listItems}
         confirmText="OK"
         cancelText="Cancel"
         hideCancel

@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config/api';
 import type { BootstrapPayload } from '../types/bootstrap';
+import { setAppLocale, setAppTimezone } from '../utils/formatDateTime';
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
   const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/bootstrap`;
@@ -11,5 +12,8 @@ export async function fetchBootstrap(): Promise<BootstrapPayload> {
   if (!res.ok) {
     throw new Error(text || `Bootstrap failed (${res.status})`);
   }
-  return JSON.parse(text) as BootstrapPayload;
+  const payload = JSON.parse(text) as BootstrapPayload;
+  setAppTimezone(payload.timezone);
+  setAppLocale(payload.locale);
+  return payload;
 }

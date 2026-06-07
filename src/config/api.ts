@@ -22,10 +22,10 @@ export const PRODUCTION_API_BASE_URL = 'https://brittoassetholdings.org';
  * When `true`, Metro/debug builds also call the live server (`PRODUCTION_API_BASE_URL`).
  * Set to `false` to use local Laravel (`DEV_API_BASE_URL`) while developing.
  */
-export const USE_LIVE_API_IN_DEBUG = false;
+export const USE_LIVE_API_IN_DEBUG = true;
 
 /** Set e.g. `192.168.x.x` when testing on a real device; leave `null` for emulator/simulator defaults. */
-export const DEV_API_HOST_OVERRIDE: string | null = null;
+export const DEV_API_HOST_OVERRIDE: string | null = '192.168.8.171';
 
 function resolveDevApiHost(): string {
   if (DEV_API_HOST_OVERRIDE && DEV_API_HOST_OVERRIDE.trim() !== '') {

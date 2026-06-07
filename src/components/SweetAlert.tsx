@@ -7,15 +7,34 @@ import {
   Pressable,
   StyleSheet,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
-import { fontFamily } from '../theme/theme';
+import { colors, fontFamily } from '../theme/theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
-type SweetAlertVariant = 'warning' | 'danger';
+type SweetAlertVariant = 'success' | 'error' | 'info' | 'warning' | 'danger';
 
 const VARIANT = {
+  success: {
+    iconWrap: '#DCFCE7',
+    iconColor: '#166534',
+    confirmBg: '#15803D',
+    icon: 'check-circle' as const,
+  },
+  error: {
+    iconWrap: '#FEE2E2',
+    iconColor: '#991B1B',
+    confirmBg: '#B91C1C',
+    icon: 'x-circle' as const,
+  },
+  info: {
+    iconWrap: '#DBEAFE',
+    iconColor: colors.primary,
+    confirmBg: colors.accent,
+    icon: 'info' as const,
+  },
   danger: {
     iconWrap: '#FEE2E2',
     iconColor: '#DC2626',
@@ -41,6 +60,8 @@ export type SweetAlertProps = {
   variant?: SweetAlertVariant;
   /** When true, only the primary button is shown (typical OK / got it alerts). */
   hideCancel?: boolean;
+  /** Optional bullet list shown below the message (e.g. missing required fields). */
+  listItems?: string[];
 };
 
 /**
@@ -56,8 +77,10 @@ export function SweetAlert({
   onClose,
   variant = 'warning',
   hideCancel = false,
+  listItems,
 }: SweetAlertProps) {
   const v = VARIANT[variant];
+  const hasList = Boolean(listItems && listItems.length > 0);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -65,12 +88,29 @@ export function SweetAlert({
         {!hideCancel && (
           <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Dismiss dialog" />
         )}
-        <View style={styles.card} accessibilityRole="alert">
+        <View style={[styles.card, hasList && styles.cardWithList]} accessibilityRole="alert">
           <View style={[styles.iconRing, { backgroundColor: v.iconWrap }]}>
             <Feather name={v.icon} size={36} color={v.iconColor} strokeWidth={2.2} />
           </View>
           <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
+          <Text style={[styles.message, hasList && styles.messageWithList]}>{message}</Text>
+          {hasList ? (
+            <ScrollView
+              style={styles.listScroll}
+              contentContainerStyle={styles.listScrollContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
+              <View style={[styles.listBox, { borderColor: v.iconColor }]}>
+                {listItems!.map((item) => (
+                  <View key={item} style={styles.listRow}>
+                    <View style={[styles.listBullet, { backgroundColor: v.iconColor }]} />
+                    <Text style={styles.listItemText}>{item}</Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          ) : null}
           <View style={styles.actions}>
             {!hideCancel && (
               <TouchableOpacity
@@ -121,6 +161,10 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 16,
   },
+  cardWithList: {
+    width: Math.min(SCREEN_W - 40, 360),
+    maxHeight: '82%',
+  },
   iconRing: {
     width: 80,
     height: 80,
@@ -144,6 +188,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 22,
+  },
+  messageWithList: {
+    marginBottom: 14,
+    fontSize: 14,
+  },
+  listScroll: {
+    width: '100%',
+    maxHeight: 220,
+    marginBottom: 18,
+  },
+  listScrollContent: {
+    flexGrow: 1,
+  },
+  listBox: {
+    width: '100%',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderLeftWidth: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  listRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  listBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginTop: 7,
+  },
+  listItemText: {
+    flex: 1,
+    fontFamily: fontFamily.medium,
+    fontSize: 14,
+    color: '#374151',
+    lineHeight: 20,
   },
   actions: {
     width: '100%',

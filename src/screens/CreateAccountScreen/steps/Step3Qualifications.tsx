@@ -25,6 +25,7 @@ import { createAccountScreenStyles } from '../../../styles/styles';
 import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
 import type { RegistrationWizardNext } from '../../../types/registrationUploads';
+import { isBlank, missingFieldsAlert } from '../validation';
 
 const profileBlue = '#0056D2';
 
@@ -65,7 +66,11 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
   const [showInsuranceModal, setShowInsuranceModal] = useState(false);
   const [activeLicenceId, setActiveLicenceId] = useState<string | null>(null);
   const [activeInsuranceId, setActiveInsuranceId] = useState<string | null>(null);
-  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    listItems?: string[];
+  } | null>(null);
 
   const styles = createAccountScreenStyles;
 
@@ -111,6 +116,16 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
 
   const removeLicence = (id: string) => setLicences((prev) => prev.filter((l) => l.id !== id));
   const removeInsurance = (id: string) => setInsurances((prev) => prev.filter((i) => i.id !== id));
+
+  const isDocWithExpiryComplete = (doc: DocWithExpiry) => Boolean(doc.imageUri) && !isBlank(doc.expiry);
+  const isLicenceComplete = (l: LicenceItem) => !isBlank(l.type) && Boolean(l.imageUri) && !isBlank(l.expiry);
+  const isInsuranceComplete = (i: InsuranceItem) => !isBlank(i.type) && Boolean(i.imageUri) && !isBlank(i.expiry);
+
+  const step3Complete =
+    isDocWithExpiryComplete(policeCheck) &&
+    isDocWithExpiryComplete(fitToWork) &&
+    licences.every(isLicenceComplete) &&
+    insurances.every(isInsuranceComplete);
 
   const renderDocCard = (
     title: string,
@@ -242,13 +257,28 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
     </View>
   );
 
-  const VALIDATION_ENABLED = false; // TODO: Re-enable for production
-
   const handleSave = useCallback(() => {
-    if (VALIDATION_ENABLED && (!policeCheck.imageUri || !fitToWork.imageUri)) {
+    const missing: string[] = [];
+    if (!policeCheck.imageUri) missing.push('Police check document');
+    if (isBlank(policeCheck.expiry)) missing.push('Police check expiry date');
+    if (!fitToWork.imageUri) missing.push('Fit to work certificate');
+    if (isBlank(fitToWork.expiry)) missing.push('Fit to work expiry date');
+
+    licences.forEach((l, idx) => {
+      if (!isLicenceComplete(l)) {
+        missing.push(`Licence ${idx + 1} (type, document, and expiry)`);
+      }
+    });
+    insurances.forEach((ins, idx) => {
+      if (!isInsuranceComplete(ins)) {
+        missing.push(`Insurance ${idx + 1} (type, document, and expiry)`);
+      }
+    });
+
+    if (missing.length > 0) {
       setBlockingAlert({
-        title: 'Required documents',
-        message: 'Please upload both Police Check and Fit to Work Certificate.',
+        title: 'Complete required fields',
+        ...missingFieldsAlert(missing),
       });
       return;
     }
@@ -306,7 +336,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
       licenceUriById,
       insuranceUriById,
     });
-  }, [VALIDATION_ENABLED, policeCheck, fitToWork, licences, insurances, onNext]);
+  }, [policeCheck, fitToWork, licences, insurances, onNext]);
 
   return (
     <>
@@ -389,7 +419,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           </Modal>
 
           <TouchableOpacity
-            style={[styles.saveBtn, VALIDATION_ENABLED && (!policeCheck.imageUri || !fitToWork.imageUri) && { opacity: 0.6 }]}
+            style={[styles.saveBtn, !step3Complete && { opacity: 0.6 }]}
             activeOpacity={0.88}
             onPress={handleSave}
           >
@@ -404,6 +434,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         visible={blockingAlert !== null}
         title={blockingAlert?.title ?? ''}
         message={blockingAlert?.message ?? ''}
+        listItems={blockingAlert?.listItems}
         confirmText="OK"
         cancelText="Cancel"
         hideCancel

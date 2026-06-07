@@ -16,6 +16,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Geolocation from 'react-native-geolocation-service';
 import Feather from 'react-native-vector-icons/Feather';
+import { SweetAlert } from '../../components/SweetAlert';
+import type { SweetAlertProps } from '../../components/SweetAlert';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles } from '../../styles/styles';
@@ -24,11 +26,17 @@ import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/ma
 import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { getSessionAuthenticated } from '../../services/authSessionStorage';
+import {
+  fetchTimeClockStatus,
+  postClockIn,
+  postClockOut,
+  type TimeClockStatus,
+} from '../../services/timeClockApi';
+import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 
-const WORK_ZONE_CENTER = { lat: -33.8688, lng: 151.2093 }; // Sydney CBD - configure as needed
-const WORK_ZONE_RADIUS_M = 500;
+const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
 function haversineDistance(
   lat1: number,
@@ -76,14 +84,60 @@ function openMapsAt(lat: number, lng: number): void {
   });
 }
 
+async function requestLocationPermission(): Promise<boolean> {
+  if (Platform.OS === 'android') {
+    const result = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+    ]);
+    const fineGranted = result['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
+    const coarseGranted = result['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
+    return fineGranted || coarseGranted;
+  }
+  return true;
+}
+
+function readCurrentPosition(): Promise<{ lat: number; lng: number; accuracyMeters: number | null }> {
+  return new Promise((resolve, reject) => {
+    Geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracyMeters: position.coords.accuracy ?? null,
+        });
+      },
+      (error) => reject(new Error(error.message || 'Unable to get location')),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 5000 },
+    );
+  });
+}
+
+function assignedCoordsFromProfile(profile: UserProfileSnapshot | null | undefined) {
+  const lat = Number(profile?.assignedWorkLocationLat);
+  const lng = Number(profile?.assignedWorkLocationLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function formatZoneBadgeLabel(distanceToSiteM: number, geofenceRadiusM: number): string {
+  if (distanceToSiteM <= geofenceRadiusM) {
+    return `In zone (${geofenceRadiusM} m)`;
+  }
+  const outsideM = Math.max(0, Math.round(distanceToSiteM - geofenceRadiusM));
+  return `Out of zone (${outsideM} m outside)`;
+}
+
 export function DashboardScreen() {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const [isClockedIn, setIsClockedIn] = useState(false);
+  const [clockPunching, setClockPunching] = useState(false);
+  const [timeClockStatus, setTimeClockStatus] = useState<TimeClockStatus | null>(null);
+  const [geofenceRadiusM, setGeofenceRadiusM] = useState(DEFAULT_GEOFENCE_RADIUS_M);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [isInZone, setIsInZone] = useState<boolean | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
@@ -91,6 +145,20 @@ export function DashboardScreen() {
   const mapLoadSeq = useRef(0);
   const [welcomeName, setWelcomeName] = useState('there');
   const [assignmentProfile, setAssignmentProfile] = useState<UserProfileSnapshot | null>(null);
+  const [clockAlert, setClockAlert] = useState<{
+    title: string;
+    message: string;
+    variant: NonNullable<SweetAlertProps['variant']>;
+  } | null>(null);
+
+  const showClockAlert = useCallback(
+    (title: string, message: string, variant: NonNullable<SweetAlertProps['variant']>) => {
+      setClockAlert({ title, message, variant });
+    },
+    [],
+  );
+
+  const dismissClockAlert = useCallback(() => setClockAlert(null), []);
 
   const styles = dashboardStyles;
   const scrollBottomPad = floatingTabBarClearance(insets.bottom) + spacing.lg;
@@ -100,73 +168,111 @@ export function DashboardScreen() {
     [locationAddress],
   );
 
-  const assignedCoords = useMemo(() => {
-    const lat = Number(assignmentProfile?.assignedWorkLocationLat);
-    const lng = Number(assignmentProfile?.assignedWorkLocationLng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    return { lat, lng };
-  }, [assignmentProfile?.assignedWorkLocationLat, assignmentProfile?.assignedWorkLocationLng]);
+  const assignedCoords = useMemo(
+    () => assignedCoordsFromProfile(assignmentProfile),
+    [assignmentProfile],
+  );
 
   const mapTargetCoords = assignedCoords ?? userCoords;
   const mapTargetAddress = assignmentProfile?.assignedWorkLocationAddress ?? locationAddress;
+
+  const distanceToSiteM = useMemo(() => {
+    if (!userCoords || !assignedCoords) return null;
+    return haversineDistance(
+      userCoords.lat,
+      userCoords.lng,
+      assignedCoords.lat,
+      assignedCoords.lng,
+    );
+  }, [userCoords, assignedCoords]);
+
+  const isInZone = useMemo(() => {
+    if (distanceToSiteM === null) return null;
+    return distanceToSiteM <= geofenceRadiusM;
+  }, [distanceToSiteM, geofenceRadiusM]);
+
+  const zoneBadgeLabel = useMemo(() => {
+    if (distanceToSiteM === null) return null;
+    return formatZoneBadgeLabel(distanceToSiteM, geofenceRadiusM);
+  }, [distanceToSiteM, geofenceRadiusM]);
 
   const openAppSettings = useCallback(() => {
     Linking.openSettings();
   }, []);
 
-  const fetchLocation = useCallback(async () => {
-    setLocationLoading(true);
-    setLocationError(null);
-    try {
-      if (Platform.OS === 'android') {
-        const result = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-        ]);
-        const fineGranted = result['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-        const coarseGranted = result['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-        if (!fineGranted && !coarseGranted) {
+  const refreshDeviceLocation = useCallback(
+    async (opts?: {
+      /** When false, caller owns loading state (e.g. combined profile + GPS refresh). */
+      manageLoading?: boolean;
+    }) => {
+      const manageLoading = opts?.manageLoading !== false;
+      if (manageLoading) {
+        setLocationLoading(true);
+        setLocationError(null);
+      }
+      try {
+        const granted = await requestLocationPermission();
+        if (!granted) {
           setLocationError('permission_denied');
           setUserCoords(null);
           setLocationAddress(null);
-          setLocationLoading(false);
           return;
         }
+
+        const position = await readCurrentPosition();
+        setUserCoords({ lat: position.lat, lng: position.lng });
+        const address = await reverseGeocode(position.lat, position.lng);
+        setLocationAddress(address);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Location failed';
+        setLocationError(message);
+        setUserCoords(null);
+        setLocationAddress(null);
+      } finally {
+        if (manageLoading) {
+          setLocationLoading(false);
+        }
       }
-      Geolocation.getCurrentPosition(
-        async (position) => {
-          const { latitude, longitude } = position.coords;
-          setUserCoords({ lat: latitude, lng: longitude });
-          const address = await reverseGeocode(latitude, longitude);
-          setLocationAddress(address);
-          const distanceM = haversineDistance(
-            latitude,
-            longitude,
-            WORK_ZONE_CENTER.lat,
-            WORK_ZONE_CENTER.lng
-          );
-          setIsInZone(distanceM <= WORK_ZONE_RADIUS_M);
-          setLocationLoading(false);
-        },
-        (error) => {
-          setLocationError(error.message || 'Unable to get location');
-          setUserCoords(null);
-          setLocationAddress(null);
-          setLocationLoading(false);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Location failed';
-      setLocationError(message);
-      setUserCoords(null);
+    },
+    [],
+  );
+
+  const handleUpdateLocation = useCallback(async () => {
+    if (locationLoading) return;
+
+    setLocationLoading(true);
+    setLocationError(null);
+
+    let profileSnapshot = assignmentProfile;
+    let radiusM = geofenceRadiusM;
+
+    try {
+      const signedIn = await getSessionAuthenticated();
+      if (signedIn) {
+        const api = await refreshAndCacheAccountProfileFromApi();
+        if (api.ok) {
+          profileSnapshot = api.profile;
+          setAssignmentProfile(api.profile);
+        }
+
+        const clock = await fetchTimeClockStatus();
+        if (clock.ok) {
+          setTimeClockStatus(clock.time_clock);
+          setIsClockedIn(clock.time_clock.is_clocked_in);
+          radiusM = clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M;
+          setGeofenceRadiusM(radiusM);
+        }
+      }
+
+      await refreshDeviceLocation({ manageLoading: false });
+    } finally {
       setLocationLoading(false);
     }
-  }, []);
+  }, [assignmentProfile, geofenceRadiusM, locationLoading, refreshDeviceLocation]);
 
   useEffect(() => {
-    fetchLocation();
-  }, [fetchLocation]);
+    void refreshDeviceLocation();
+  }, [refreshDeviceLocation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -175,9 +281,20 @@ export function DashboardScreen() {
         setWelcomeName(welcomeDisplayName(local));
         setAssignmentProfile(local);
         const signedIn = await getSessionAuthenticated();
-        if (!signedIn) return;
+        if (!signedIn) {
+          setIsClockedIn(false);
+          setTimeClockStatus(null);
+          return;
+        }
         const api = await refreshAndCacheAccountProfileFromApi();
         if (api.ok) setAssignmentProfile(api.profile);
+
+        const clock = await fetchTimeClockStatus();
+        if (clock.ok) {
+          setTimeClockStatus(clock.time_clock);
+          setIsClockedIn(clock.time_clock.is_clocked_in);
+          setGeofenceRadiusM(clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+        }
       })();
     }, []),
   );
@@ -202,8 +319,85 @@ export function DashboardScreen() {
       });
   }, [mapTargetCoords, locationError, locationLoading]);
 
-  const handleClockIn = () => {
-    setIsClockedIn((prev) => !prev);
+  const handleClockIn = async () => {
+    if (clockPunching) return;
+
+    const signedIn = await getSessionAuthenticated();
+    if (!signedIn) {
+      showClockAlert(
+        'Sign in required',
+        'Please sign in before using the time clock.',
+        'info',
+      );
+      return;
+    }
+
+    if (!isClockedIn && timeClockStatus && !timeClockStatus.can_clock_in) {
+      if (timeClockStatus.assignment_not_ready_reason === 'no_work_location_assigned') {
+        showClockAlert(
+          'No work site assigned',
+          'Your administrator must assign a work location before you can clock in.',
+          'info',
+        );
+      } else if (timeClockStatus.assignment_not_ready_reason === 'work_location_missing_coordinates') {
+        showClockAlert(
+          'Work site not configured',
+          'Your assigned work location needs map coordinates. Contact your administrator.',
+          'info',
+        );
+      } else {
+        showClockAlert('Cannot clock in', 'Clock in is not available right now.', 'warning');
+      }
+      return;
+    }
+
+    setClockPunching(true);
+    try {
+      const granted = await requestLocationPermission();
+      if (!granted) {
+        showClockAlert(
+          'Location required',
+          'Allow location access so we can verify you are at your assigned work site.',
+          'info',
+        );
+        return;
+      }
+
+      const position = await readCurrentPosition();
+      setUserCoords({ lat: position.lat, lng: position.lng });
+      const address = await reverseGeocode(position.lat, position.lng);
+      setLocationAddress(address);
+
+      const coords = {
+        latitude: position.lat,
+        longitude: position.lng,
+        accuracy_meters: position.accuracyMeters,
+      };
+
+      const result = isClockedIn ? await postClockOut(coords) : await postClockIn(coords);
+      if (!result.ok) {
+        showClockAlert(
+          isClockedIn ? 'Clock out failed' : 'Clock in failed',
+          result.message,
+          'error',
+        );
+        return;
+      }
+
+      setIsClockedIn(result.time_clock.is_clocked_in);
+      setTimeClockStatus(result.time_clock);
+      setGeofenceRadiusM(result.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+      showClockAlert(
+        result.time_clock.is_clocked_in ? 'Clocked in' : 'Clocked out',
+        result.message,
+        'success',
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not read GPS location.';
+      showClockAlert('Location error', message, 'error');
+    } finally {
+      setClockPunching(false);
+    }
   };
 
   return (
@@ -269,16 +463,30 @@ export function DashboardScreen() {
               {isClockedIn ? 'Clocked In' : 'Not Clocked In'}
             </Text>
           </View>
+          {isClockedIn && timeClockStatus?.open_session?.clocked_in_at ? (
+            <Text style={styles.clockSinceText}>
+              Since {formatInstantInAppTimezone(timeClockStatus.open_session.clocked_in_at)}
+            </Text>
+          ) : null}
           <Pressable
             style={[styles.clockInBtn, isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut]}
-            onPress={handleClockIn}
+            onPress={() => void handleClockIn()}
+            disabled={clockPunching}
           >
-            <Feather
-              name={isClockedIn ? 'log-out' : 'log-in'}
-              size={52}
-              color={isClockedIn ? '#166534' : '#991B1B'}
-              style={styles.clockInBtnIcon}
-            />
+            {clockPunching ? (
+              <ActivityIndicator
+                size="large"
+                color={isClockedIn ? '#166534' : '#991B1B'}
+                style={styles.clockInBtnIcon}
+              />
+            ) : (
+              <Feather
+                name={isClockedIn ? 'log-out' : 'log-in'}
+                size={52}
+                color={isClockedIn ? '#166534' : '#991B1B'}
+                style={styles.clockInBtnIcon}
+              />
+            )}
             <Text style={[styles.clockInBtnText, isClockedIn ? styles.clockInBtnTextIn : styles.clockInBtnTextOut]}>
               {isClockedIn ? 'Clock Out' : 'Clock In'}
             </Text>
@@ -298,18 +506,21 @@ export function DashboardScreen() {
             <Text style={styles.locationHeading}>
               {assignedCoords ? 'Assigned work location' : 'Current location'}
             </Text>
-            {!locationLoading && isInZone !== null && (
+            {!locationLoading && isInZone !== null && assignedCoords && zoneBadgeLabel ? (
               <View style={isInZone ? styles.inZoneBadge : styles.outZoneBadge}>
                 <Feather
                   name="briefcase"
-                  size={18}
+                  size={16}
                   color={isInZone ? '#059669' : '#D97706'}
                 />
-                <Text style={isInZone ? styles.inZoneText : styles.outZoneText}>
-                  {isInZone ? 'In Zone' : 'Out of Zone'}
+                <Text
+                  style={isInZone ? styles.inZoneText : styles.outZoneText}
+                  numberOfLines={2}
+                >
+                  {zoneBadgeLabel}
                 </Text>
               </View>
-            )}
+            ) : null}
           </View>
 
           {locationLoading && (
@@ -415,7 +626,7 @@ export function DashboardScreen() {
             <Text style={styles.locationCoordsText}>Update location</Text>
             <TouchableOpacity
               style={styles.locationRefreshBtn}
-              onPress={fetchLocation}
+              onPress={() => void handleUpdateLocation()}
               disabled={locationLoading}
               hitSlop={12}
             >
@@ -424,6 +635,18 @@ export function DashboardScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <SweetAlert
+        visible={clockAlert !== null}
+        title={clockAlert?.title ?? ''}
+        message={clockAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant={clockAlert?.variant ?? 'info'}
+        onClose={dismissClockAlert}
+        onConfirm={dismissClockAlert}
+      />
     </View>
   );
 }

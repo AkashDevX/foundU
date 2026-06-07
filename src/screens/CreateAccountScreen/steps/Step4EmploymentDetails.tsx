@@ -26,6 +26,8 @@ import { createAccountScreenStyles } from '../../../styles/styles';
 import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
 import type { RegistrationWizardNext } from '../../../types/registrationUploads';
+import { isBlank, missingFieldsAlert } from '../validation';
+import { TermsAndConditionsModal } from '../TermsAndConditionsModal';
 
 interface Step4EmploymentDetailsProps {
   onNext: RegistrationWizardNext;
@@ -56,6 +58,8 @@ export function Step4EmploymentDetails({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const accountNameRef = useRef<TextInput>(null);
   const accountNumberRef = useRef<TextInput>(null);
   const bankNameRef = useRef<TextInput>(null);
@@ -67,6 +71,7 @@ export function Step4EmploymentDetails({
   const [blockingAlert, setBlockingAlert] = useState<{
     title: string;
     message: string;
+    listItems?: string[];
     focusPasswordOnOk?: boolean;
   } | null>(null);
 
@@ -82,6 +87,18 @@ export function Step4EmploymentDetails({
 
   const isOwnVehicle = modeOfTransport === 'Own vehicle';
   const styles = createAccountScreenStyles;
+
+  const step4Complete =
+    !isBlank(accountName) &&
+    !isBlank(accountNumber) &&
+    !isBlank(branchCode) &&
+    !isBlank(bankName) &&
+    !isBlank(modeOfTransport) &&
+    !isBlank(password) &&
+    !isBlank(confirmPassword) &&
+    acceptedTerms &&
+    (!isOwnVehicle ||
+      (!isBlank(vehicleRegistration) && !isBlank(vehicleExpiry) && Boolean(vehicleInsuranceUri)));
 
   const vehicleExpiryMinDate = startOfToday();
   const vehicleExpiryMaxDate = addYears(vehicleExpiryMinDate, 15);
@@ -102,6 +119,28 @@ export function Step4EmploymentDetails({
   };
 
   const handleComplete = useCallback(() => {
+    const missing: string[] = [];
+    if (isBlank(accountName)) missing.push('Bank account name');
+    if (isBlank(accountNumber)) missing.push('Bank account number');
+    if (isBlank(branchCode)) missing.push('Branch code');
+    if (isBlank(bankName)) missing.push('Bank name');
+    if (isBlank(modeOfTransport)) missing.push('Mode of transport');
+    if (isOwnVehicle) {
+      if (isBlank(vehicleRegistration)) missing.push('Vehicle registration');
+      if (isBlank(vehicleExpiry)) missing.push('Vehicle expiry date');
+      if (!vehicleInsuranceUri) missing.push('Vehicle insurance document');
+    }
+    if (isBlank(password)) missing.push('Password');
+    if (isBlank(confirmPassword)) missing.push('Confirm password');
+    if (!acceptedTerms) missing.push('Acceptance of Terms and conditions');
+
+    if (missing.length > 0) {
+      setBlockingAlert({
+        title: 'Complete required fields',
+        ...missingFieldsAlert(missing),
+      });
+      return;
+    }
     if (password !== confirmPassword) {
       setBlockingAlert({
         title: 'Passwords do not match',
@@ -141,6 +180,8 @@ export function Step4EmploymentDetails({
     vehicleExpiry,
     vehicleInsuranceUri,
     isSubmitting,
+    isOwnVehicle,
+    acceptedTerms,
   ]);
 
   const dismissAlert = useCallback(() => {
@@ -368,8 +409,29 @@ export function Step4EmploymentDetails({
             </TouchableOpacity>
           </Pressable>
 
+          <View style={styles.termsAcceptRow}>
+            <TouchableOpacity
+              style={[styles.termsCheckbox, acceptedTerms && styles.termsCheckboxChecked]}
+              onPress={() => setAcceptedTerms((v) => !v)}
+              activeOpacity={0.75}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: acceptedTerms }}
+              accessibilityLabel="Accept Terms and conditions"
+            >
+              {acceptedTerms ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
+            </TouchableOpacity>
+            <View style={styles.termsAcceptTextWrap}>
+              <Text style={styles.termsAcceptText}>
+                I accept the{' '}
+                <Text style={styles.termsLink} onPress={() => setShowTermsModal(true)}>
+                  Terms and conditions
+                </Text>
+              </Text>
+            </View>
+          </View>
+
           <TouchableOpacity
-            style={[styles.saveBtn, isSubmitting && { opacity: 0.65 }]}
+            style={[styles.saveBtn, (isSubmitting || !step4Complete) && { opacity: 0.65 }]}
             activeOpacity={0.88}
             onPress={handleComplete}
             disabled={isSubmitting}
@@ -380,10 +442,13 @@ export function Step4EmploymentDetails({
         </View>
       </ScrollView>
 
+      <TermsAndConditionsModal visible={showTermsModal} onClose={() => setShowTermsModal(false)} />
+
       <SweetAlert
         visible={blockingAlert !== null}
         title={blockingAlert?.title ?? ''}
         message={blockingAlert?.message ?? ''}
+        listItems={blockingAlert?.listItems}
         confirmText="OK"
         cancelText="Cancel"
         hideCancel

@@ -15,6 +15,8 @@ export type PicklistOption = {
 
 export type BootstrapPayload = {
   generated_at: string;
+  timezone?: string;
+  locale?: string;
   companies: BootstrapCompany[];
   picklists: Record<string, PicklistOption[]>;
 };

@@ -26,6 +26,7 @@ import { createAccountScreenStyles } from '../../../styles/styles';
 import { useAppBootstrap } from '../../../context/AppBootstrapContext';
 import type { UserProfileSnapshot } from '../../../types/userProfile';
 import type { RegistrationWizardNext } from '../../../types/registrationUploads';
+import { isBlank, missingFieldsAlert } from '../validation';
 
 const profileBlue = '#0056D2';
 
@@ -94,7 +95,11 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
   const [hoursPerWeek, setHoursPerWeek] = useState('');
   const [weeklySlots, setWeeklySlots] = useState<Record<string, Set<TimeSlotKey>>>(() => makeEmptyWeeklySlots());
   const [showVisaModal, setShowVisaModal] = useState(false);
-  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    listItems?: string[];
+  } | null>(null);
   const hoursPerWeekRef = useRef<TextInput>(null);
 
   const styles = createAccountScreenStyles;
@@ -143,7 +148,9 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
 
   const validIdCount = idDocuments.filter((d) => d.type && d.imageUri).length;
   const minIdMet = validIdCount >= 2;
-  const VALIDATION_ENABLED = false; // TODO: Re-enable for production
+  const idDocsComplete = idDocuments.every(
+    (d) => (isBlank(d.type) && !d.imageUri) || (d.type && d.imageUri),
+  );
 
   const toggleWeeklySlot = (dayId: string, slot: TimeSlotKey) => {
     setWeeklySlots((prev) => {
@@ -159,12 +166,35 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
     0,
   );
 
+  const step2Complete =
+    !isBlank(visaStatus) &&
+    hasUnrestrictedWorkRights !== null &&
+    (hasUnrestrictedWorkRights !== false || !isBlank(visaExpiry)) &&
+    minIdMet &&
+    idDocsComplete &&
+    !isBlank(hoursPerWeek) &&
+    selectedSlotCount > 0;
+
   const handleSave = useCallback(() => {
-    if (VALIDATION_ENABLED && !minIdMet) {
+    const missing: string[] = [];
+    if (isBlank(visaStatus)) missing.push('Visa status');
+    if (hasUnrestrictedWorkRights === null) {
+      missing.push('Unrestricted work rights');
+    } else if (hasUnrestrictedWorkRights === false && isBlank(visaExpiry)) {
+      missing.push('Visa expiry date');
+    }
+    if (!minIdMet) {
+      missing.push('At least 2 ID documents (type and image each)');
+    } else if (!idDocsComplete) {
+      missing.push('Complete all ID document fields (type and image)');
+    }
+    if (isBlank(hoursPerWeek)) missing.push('Hours per week');
+    if (selectedSlotCount === 0) missing.push('At least one weekly time block');
+
+    if (missing.length > 0) {
       setBlockingAlert({
-        title: 'ID documents required',
-        message:
-          "Please upload at least 2 ID documents (Driver's Licence, Passport, Medicare, or 18+ Card) with both type selected and document image uploaded.",
+        title: 'Complete required fields',
+        ...missingFieldsAlert(missing),
       });
       return;
     }
@@ -199,8 +229,8 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
       idDocumentsJson,
     }, { idDocumentByKey });
   }, [
-    VALIDATION_ENABLED,
     minIdMet,
+    idDocsComplete,
     onNext,
     visaStatus,
     hasUnrestrictedWorkRights,
@@ -208,6 +238,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
     hoursPerWeek,
     weeklySlots,
     idDocuments,
+    selectedSlotCount,
   ]);
 
   return (
@@ -442,7 +473,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           </View>
 
           <TouchableOpacity
-            style={[styles.saveBtn, VALIDATION_ENABLED && !minIdMet && { opacity: 0.6 }]}
+            style={[styles.saveBtn, !step2Complete && { opacity: 0.6 }]}
             activeOpacity={0.88}
             onPress={handleSave}
           >
@@ -457,6 +488,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
         visible={blockingAlert !== null}
         title={blockingAlert?.title ?? ''}
         message={blockingAlert?.message ?? ''}
+        listItems={blockingAlert?.listItems}
         confirmText="OK"
         cancelText="Cancel"
         hideCancel

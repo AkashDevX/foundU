@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { dashboardStyles } from '../../styles/styles';
+import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { colors, fontFamily, spacing } from '../../theme/theme';
 import { getDisplayProfilePhotoUri, loadAccountProfile } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
@@ -104,7 +105,6 @@ export function ShiftsScreen() {
   const insets = useSafeAreaInsets();
   const headerStyles = dashboardStyles;
   const [activeTab, setActiveTab] = useState<TabType>('Upcoming');
-  const [elapsed, setElapsed] = useState({ h: 0, m: 0, s: 0 });
   const [profile, setProfile] = useState<UserProfileSnapshot | null>(null);
 
   const refreshProfile = useCallback(() => {
@@ -124,25 +124,6 @@ export function ShiftsScreen() {
     }, [refreshProfile]),
   );
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      setElapsed((prev) => {
-        let { h, m, s } = prev;
-        s += 1;
-        if (s >= 60) {
-          s = 0;
-          m += 1;
-        }
-        if (m >= 60) {
-          m = 0;
-          h += 1;
-        }
-        return { h, m, s };
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
-
   const employmentStatus = profile?.employmentStatus?.toLowerCase() ?? '';
   const isPendingApproval = employmentStatus === 'pending';
   const isActiveEmployee = employmentStatus === 'active';
@@ -155,14 +136,7 @@ export function ShiftsScreen() {
       profile.companyName?.trim() ||
       'Your assignment';
 
-  const sessionHeadline = !profile
-    ? 'Loading…'
-    : profile.jobTitle?.trim() ||
-      profile.assignedShiftName?.trim() ||
-      profile.companyName?.trim() ||
-      'Your workplace';
-
-  const sessionSubline = !profile
+  const rosterSubtitle = !profile
     ? ''
     : [
         profile.companyName?.trim(),
@@ -170,8 +144,6 @@ export function ShiftsScreen() {
       ]
         .filter(Boolean)
         .join(' · ');
-
-  const timerStr = `${String(elapsed.h).padStart(2, '0')}:${String(elapsed.m).padStart(2, '0')}:${String(elapsed.s).padStart(2, '0')}`;
 
   const hasExtraNotes =
     !!profile?.assignedShiftBreaksSummary?.trim() ||
@@ -191,40 +163,6 @@ export function ShiftsScreen() {
         </View>
       ) : null}
 
-      <Text style={s.sectionLabel}>CURRENT SESSION</Text>
-      <View style={[s.sessionCard, isPendingApproval && s.sessionCardMuted]}>
-        <View style={s.sessionCardHeader}>
-          <View style={[s.statusPill, isActiveEmployee ? s.statusPillActive : s.statusPillNeutral]}>
-            <Text style={[s.statusPillText, isActiveEmployee ? s.statusPillTextActive : s.statusPillTextNeutral]}>
-              {formatEmploymentLabel(profile?.employmentStatus).toUpperCase()}
-            </Text>
-          </View>
-          <View style={s.sessionIconWrap}>
-            <Feather name="briefcase" size={24} color="#FFFFFF" strokeWidth={2} />
-          </View>
-        </View>
-        <Text style={s.sessionJobTitle}>{sessionHeadline}</Text>
-        {sessionSubline ? <Text style={s.sessionMetaLine}>{sessionSubline}</Text> : null}
-        <Text style={s.sessionStartTime}>
-          {isPendingApproval
-            ? 'You will be able to clock in after approval.'
-            : profile?.assignedShiftStartTime
-              ? `Scheduled start: ${profile.assignedShiftStartTime}${profile.assignedShiftEndTime ? ` · End: ${profile.assignedShiftEndTime}` : ''}`
-              : 'No shift start time on file — ask your manager if this looks wrong.'}
-        </Text>
-        {!isPendingApproval ? (
-          <View style={s.sessionFooter}>
-            <View>
-              <Text style={s.durationLabel}>SESSION TIMER (LOCAL)</Text>
-              <Text style={s.durationTimer}>{timerStr}</Text>
-            </View>
-            <Pressable style={s.clockOutBtn} disabled>
-              <Text style={s.clockOutBtnText}>Clock Out</Text>
-            </Pressable>
-          </View>
-        ) : null}
-      </View>
-
       {!isPendingApproval ? (
         <>
           <View style={s.scheduleHeader}>
@@ -232,13 +170,33 @@ export function ShiftsScreen() {
           </View>
 
           <View style={s.shiftCard}>
-            <View style={s.shiftCardBadgeConfirmed}>
-              <Text style={s.shiftCardBadgeTextConfirmed}>FROM WORKPLACE</Text>
+            <View style={s.shiftCardTopRow}>
+              <View style={[s.statusPill, isActiveEmployee ? s.statusPillActive : s.statusPillNeutral]}>
+                <Text style={[s.statusPillText, isActiveEmployee ? s.statusPillTextActive : s.statusPillTextNeutral]}>
+                  {formatEmploymentLabel(profile?.employmentStatus).toUpperCase()}
+                </Text>
+              </View>
+              <View style={s.shiftCardBadgeConfirmed}>
+                <Text style={s.shiftCardBadgeTextConfirmed}>FROM WORKPLACE</Text>
+              </View>
             </View>
+
             <Text style={s.shiftCardTitle}>{rosterTitle}</Text>
+            {rosterSubtitle ? <Text style={s.shiftCardSubtitle}>{rosterSubtitle}</Text> : null}
+
+            <View style={s.shiftHoursRow}>
+              <Feather name="clock" size={18} color={colors.primary} />
+              <View style={s.shiftHoursText}>
+                <Text style={s.shiftHoursLabel}>Scheduled hours</Text>
+                <Text style={s.shiftHoursValue}>
+                  {profile?.assignedShiftStartTime
+                    ? `${profile.assignedShiftStartTime}${profile.assignedShiftEndTime ? ` – ${profile.assignedShiftEndTime}` : ''}`
+                    : shiftTimeWindow(profile ?? {})}
+                </Text>
+              </View>
+            </View>
 
             <ShiftInfoRow icon="calendar" label="Effective from" value={profile?.assignedShiftDate ?? ''} />
-            <ShiftInfoRow icon="clock" label="Shift hours" value={shiftTimeWindow(profile ?? {})} />
             <ShiftInfoRow icon="briefcase" label="Department" value={departmentLine(profile ?? {})} />
             <ShiftInfoRow icon="user" label="Role" value={profile?.jobTitle?.trim() ?? ''} />
             <ShiftInfoRow
@@ -316,7 +274,7 @@ export function ShiftsScreen() {
     );
 
   return (
-    <View style={[s.container, { paddingTop: insets.top, paddingBottom: 100 }]}>
+    <View style={[s.container, { paddingTop: insets.top, paddingBottom: floatingTabBarClearance(insets.bottom) }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={headerStyles.header}>
         <TouchableOpacity
@@ -435,32 +393,16 @@ const s = StyleSheet.create({
     color: '#92400E',
     lineHeight: 20,
   },
-  sessionCard: {
-    backgroundColor: '#0056A4',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 28,
-    overflow: 'hidden',
-  },
-  sessionCardMuted: {
-    opacity: 0.92,
-  },
-  sessionCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 16,
-  },
   statusPill: {
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 20,
   },
   statusPillActive: {
-    backgroundColor: '#D4F7D4',
+    backgroundColor: '#DCFCE7',
   },
   statusPillNeutral: {
-    backgroundColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: '#F3F4F6',
   },
   statusPillText: {
     fontFamily: fontFamily.bold,
@@ -468,70 +410,10 @@ const s = StyleSheet.create({
     letterSpacing: 0.6,
   },
   statusPillTextActive: {
-    color: '#1A531A',
+    color: '#166534',
   },
   statusPillTextNeutral: {
-    color: '#FFFFFF',
-  },
-  sessionIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sessionJobTitle: {
-    fontFamily: fontFamily.bold,
-    fontSize: 20,
-    color: colors.white,
-    marginBottom: 4,
-  },
-  sessionMetaLine: {
-    fontFamily: fontFamily.regular,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.9)',
-    marginBottom: 8,
-    lineHeight: 18,
-  },
-  sessionStartTime: {
-    fontFamily: fontFamily.regular,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.85)',
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  sessionFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    borderRadius: 14,
-    padding: 16,
-  },
-  durationLabel: {
-    fontFamily: fontFamily.bold,
-    fontSize: 11,
-    letterSpacing: 0.6,
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 4,
-  },
-  durationTimer: {
-    fontFamily: fontFamily.bold,
-    fontSize: 28,
-    color: colors.white,
-  },
-  clockOutBtn: {
-    backgroundColor: colors.white,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 24,
-    opacity: 0.85,
-  },
-  clockOutBtnText: {
-    fontFamily: fontFamily.bold,
-    fontSize: 15,
-    color: '#0056A4',
+    color: '#6B7280',
   },
   scheduleHeader: {
     flexDirection: 'row',
@@ -550,13 +432,18 @@ const s = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
   },
+  shiftCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+    gap: spacing.sm,
+  },
   shiftCardBadgeConfirmed: {
-    alignSelf: 'flex-end',
     backgroundColor: '#DBEAFE',
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 12,
-    marginBottom: 12,
   },
   shiftCardBadgeTextConfirmed: {
     fontFamily: fontFamily.bold,
@@ -568,7 +455,42 @@ const s = StyleSheet.create({
     fontFamily: fontFamily.bold,
     fontSize: 17,
     color: colors.text.primary,
-    marginBottom: 12,
+    marginBottom: 4,
+  },
+  shiftCardSubtitle: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.secondary,
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  shiftHoursRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#F0F7FF',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0,86,164,0.12)',
+  },
+  shiftHoursText: {
+    flex: 1,
+  },
+  shiftHoursLabel: {
+    fontFamily: fontFamily.bold,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: colors.primary,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  shiftHoursValue: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 16,
+    color: colors.text.primary,
+    lineHeight: 22,
   },
   infoRow: {
     flexDirection: 'row',
