@@ -71,7 +71,14 @@ function loginValidationAlert(missing: MissingField[]): { title: string; message
 
 export function LoginScreen() {
   const navigation = useNavigation<any>();
-  const { companies, loading: bootstrapLoading } = useAppBootstrap();
+  const {
+    companies,
+    loading: bootstrapLoading,
+    refreshing: bootstrapRefreshing,
+    error: bootstrapError,
+    refetch: refetchBootstrap,
+  } = useAppBootstrap();
+  const orgListLoading = bootstrapLoading && companies.length === 0;
   const insets = useSafeAreaInsets();
   const [companySlug, setCompanySlug] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -142,7 +149,7 @@ export function LoginScreen() {
       if (!result.ok) {
         setValidationAlert({
           title: 'Sign in failed',
-          message: `${result.message}\n\nAPI: ${API_BASE_URL}`,
+          message: __DEV__ ? `${result.message}\n\nAPI: ${API_BASE_URL}` : result.message,
         });
         return;
       }
@@ -178,7 +185,7 @@ export function LoginScreen() {
       const msg = e instanceof Error ? e.message : String(e);
       setValidationAlert({
         title: 'Sign in failed',
-        message: `${msg}\n\nAPI: ${API_BASE_URL}`,
+        message: __DEV__ ? `${msg}\n\nAPI: ${API_BASE_URL}` : msg,
       });
     } finally {
       setLoginSubmitting(false);
@@ -209,7 +216,7 @@ export function LoginScreen() {
             <View style={[styles.geo, styles.geo2]} />
             <View style={[styles.geo, styles.geo3]} />
             <View style={[styles.geo, styles.geo4]} />
-            <Text style={styles.appName}>Workforce</Text>
+            <Text style={styles.appName}>CruLynk</Text>
             <Text style={styles.tagline}>Precision in Motion</Text>
           </View>
 
@@ -225,10 +232,39 @@ export function LoginScreen() {
             <CompanyPicker
               variant="login"
               companies={companies}
-              listingLoading={bootstrapLoading}
+              listingLoading={orgListLoading}
               value={companySlug}
               onChange={setCompanySlug}
             />
+
+            {bootstrapRefreshing && companies.length > 0 ? (
+              <Text style={bootstrapBannerStyles.refreshHint}>Updating organization list…</Text>
+            ) : null}
+
+            {!orgListLoading && companies.length === 0 ? (
+              <View style={bootstrapBannerStyles.wrap}>
+                <Text style={bootstrapBannerStyles.title}>
+                  {bootstrapError ? 'Could not load organizations' : 'No organizations on server'}
+                </Text>
+                <Text style={bootstrapBannerStyles.body}>
+                  {bootstrapError ??
+                    (__DEV__
+                      ? `The server at ${API_BASE_URL} responded but returned no companies.`
+                      : 'No organizations were returned. Check your connection and tap Retry.')}
+                </Text>
+                {__DEV__ ? <Text style={bootstrapBannerStyles.api}>API: {API_BASE_URL}</Text> : null}
+                <TouchableOpacity
+                  style={bootstrapBannerStyles.retryBtn}
+                  onPress={() => void refetchBootstrap()}
+                  activeOpacity={0.7}
+                  disabled={bootstrapRefreshing}
+                >
+                  <Text style={bootstrapBannerStyles.retryText}>
+                    {bootstrapRefreshing ? 'Retrying…' : 'Retry'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
             <Text style={[styles.label, { marginTop: spacing.xl }]}>EMAIL ADDRESS</Text>
             <Pressable style={styles.input} onPress={() => emailRef.current?.focus()}>
@@ -410,6 +446,54 @@ export function LoginScreen() {
     </View>
   );
 }
+
+const bootstrapBannerStyles = StyleSheet.create({
+  wrap: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  title: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    color: '#B91C1C',
+    marginBottom: spacing.xs,
+  },
+  body: {
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    color: '#7F1D1D',
+    lineHeight: 18,
+  },
+  api: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.medium,
+    fontSize: 12,
+    color: '#991B1B',
+  },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+  },
+  retryText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 13,
+    color: '#B91C1C',
+  },
+  refreshHint: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.regular,
+    fontSize: 12,
+    color: colors.text.secondary,
+  },
+});
 
 const signInOverlayStyles = StyleSheet.create({
   signInDisabled: { opacity: 0.85 },

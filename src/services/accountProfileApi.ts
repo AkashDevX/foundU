@@ -204,6 +204,30 @@ function asYesNoUploaded(v: unknown): string | undefined {
   return asTrimmedString(v);
 }
 
+function parseShiftDays(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const days = v
+    .map((item) => (typeof item === 'string' ? item.trim().toLowerCase() : ''))
+    .filter((item) => item !== '');
+  return days.length ? days : undefined;
+}
+
+function parseWeeklyAvailabilityJson(
+  v: unknown,
+): UserProfileSnapshot['weeklyAvailabilityJson'] {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (Array.isArray(value)) {
+      const slots = value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item) => item !== '');
+      if (slots.length) out[key] = slots;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function extractRow(parsed: unknown): Record<string, unknown> | null {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const o = parsed as Record<string, unknown>;
@@ -287,7 +311,9 @@ export function mapMePayloadToUserProfile(
       'department_name',
       'assignedDepartment',
     ) ?? pickString(assignmentDepartment ?? {}, 'name', 'department'),
-    assignedShiftName: pickString(row, 'assigned_shift_name', 'shift_name', 'assignedShiftName'),
+    assignedShiftName:
+      pickString(row, 'assigned_shift_name', 'shift_name', 'assignedShiftName') ??
+      pickString(assignmentShift ?? {}, 'name'),
     assignedShiftStatus: pickString(row, 'assigned_shift_status', 'shift_status', 'assignedShiftStatus'),
     assignedShiftDate:
       pickString(row, 'assigned_shift_date', 'shift_date', 'assignedShiftDate') ??
@@ -378,6 +404,10 @@ export function mapMePayloadToUserProfile(
       'weekly_availability_summary',
       'weeklyAvailabilitySummary',
     ),
+    weeklyAvailabilityJson: parseWeeklyAvailabilityJson(
+      row.weekly_availability_json ?? row.weeklyAvailabilityJson,
+    ),
+    assignedShiftDays: parseShiftDays(row.assigned_shift_days ?? assignmentShift?.shift_days),
     idDocumentsSummary: pickString(row, 'id_documents_summary', 'idDocumentsSummary'),
     policeCheckExpiry: pickString(row, 'police_check_expiry', 'policeCheckExpiry'),
     policeCheckUploaded: asYesNoUploaded(row.police_check_uploaded ?? row.policeCheckUploaded),

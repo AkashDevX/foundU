@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>foundU</string>
+	<string>CruLynk</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -34,7 +34,15 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Workforce needs your location to verify you're at work and for clock-in.</string>
+	<string>CruLynk needs your location to verify you're at work and for clock-in.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>CruLynk monitors your location while clocked in so you are automatically clocked out if you leave your work site, even when the app is in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>CruLynk monitors your location while clocked in so you are automatically clocked out if you leave your work site, even when the app is in the background.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>We need access to your photo library to upload ID documents.</string>
 	<key>UILaunchStoryboardName</key>

@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 /**
  * Employee sign-in against the company tenant DB.
@@ -71,23 +72,33 @@ export async function loginEmployee(params: {
 
   let res: Response;
   try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-Company-Slug': params.companySlug,
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Company-Slug': params.companySlug,
+        },
+        body: JSON.stringify({
+          email: params.email.trim(),
+          password: params.password,
+        }),
       },
-      body: JSON.stringify({
-        email: params.email.trim(),
-        password: params.password,
-      }),
-    });
-  } catch {
+      { timeoutMs: 25_000, retries: 1, retryDelayMs: 1_000 },
+    );
+  } catch (error) {
+    const timedOut =
+      error instanceof Error &&
+      (error.name === 'AbortError' || error.message.toLowerCase().includes('abort'));
     return {
       ok: false,
-      message:
-        'Could not reach the server. Check your connection, API URL in src/config/api.ts, and that Laravel is running.',
+      message: timedOut
+        ? 'Sign in timed out. Check your internet connection and try again.'
+        : __DEV__
+          ? 'Could not reach the server. Check your connection, API URL in src/config/api.ts, and that Laravel is running.'
+          : 'Could not reach the server. Check your internet connection and try again.',
     };
   }
 

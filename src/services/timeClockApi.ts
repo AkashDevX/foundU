@@ -142,8 +142,9 @@ export async function fetchTimeClockStatus(): Promise<
 }
 
 async function postTimeClockPunch(
-  path: 'clock-in' | 'clock-out',
+  path: 'clock-in' | 'clock-out' | 'auto-clock-out',
   coords: DeviceCoordinates,
+  extraBody?: Record<string, unknown>,
 ): Promise<TimeClockPunchResult> {
   const auth = await tenantAuthHeaders();
   if (!auth.ok) return auth;
@@ -159,6 +160,7 @@ async function postTimeClockPunch(
         latitude: coords.latitude,
         longitude: coords.longitude,
         accuracy_meters: coords.accuracy_meters ?? null,
+        ...extraBody,
       }),
     });
   } catch {
@@ -200,4 +202,8 @@ export async function postClockIn(coords: DeviceCoordinates): Promise<TimeClockP
 
 export async function postClockOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
   return postTimeClockPunch('clock-out', coords);
+}
+
+export async function postAutoClockOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
+  return postTimeClockPunch('auto-clock-out', coords, { trigger: 'left_geofence' });
 }

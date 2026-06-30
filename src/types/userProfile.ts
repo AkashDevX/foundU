@@ -57,6 +57,8 @@ export type UserProfileSnapshot = {
   visaExpiry?: string;
   hoursPerWeek?: string;
   weeklyAvailabilitySummary?: string;
+  /** Days the assigned shift template runs on (`mon`–`sun`), from backend. */
+  assignedShiftDays?: string[];
   idDocumentsSummary?: string;
   policeCheckExpiry?: string;
   policeCheckUploaded?: string;
@@ -79,8 +81,8 @@ export type UserProfileSnapshot = {
   weeklyAvailabilityJson?: Record<string, string[]>;
   /** Step 2 — ID rows; server may add `storage_path` after multipart upload. */
   idDocumentsJson?: { documentKey: string; idType: string; imageUploaded: boolean; storage_path?: string }[];
-  /** Step 3 — licence blocks; server may add `storage_path`. */
-  licencesJson?: { id: string; type: string; expiry: string; imageUploaded: boolean; storage_path?: string }[];
-  /** Step 3 — insurance blocks; server may add `storage_path`. */
-  insurancesJson?: { id: string; type: string; expiry: string; imageUploaded: boolean; storage_path?: string }[];
+  /** Step 3 — licence blocks; server may add `storage_path`. Expiry stored as ISO `YYYY-MM-DD`. */
+  licencesJson?: { id: string; type: string; expiry: string; expiry_date?: string; imageUploaded: boolean; storage_path?: string }[];
+  /** Step 3 — insurance blocks; server may add `storage_path`. Expiry stored as ISO `YYYY-MM-DD`. */
+  insurancesJson?: { id: string; type: string; expiry: string; expiry_date?: string; imageUploaded: boolean; storage_path?: string }[];
 };

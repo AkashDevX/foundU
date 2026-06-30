@@ -20,7 +20,6 @@ export function formatDateToDisplay(d: Date): string {
   return `${mm} / ${dd} / ${yyyy}`;
 }
 
-/** Parses `MM / DD / YYYY` from picker output. */
 export function parseDisplayDateToDate(s: string): Date | null {
   const m = s.trim().match(/^(\d{2}) \/ (\d{2}) \/ (\d{4})$/);
   if (!m) {
@@ -34,6 +33,18 @@ export function parseDisplayDateToDate(s: string): Date | null {
     return null;
   }
   return d;
+}
+
+/** Converts picker display `MM / DD / YYYY` to ISO `YYYY-MM-DD` for API storage. */
+export function displayDateToIso(display: string): string {
+  const trimmed = display.trim();
+  if (trimmed === '') return '';
+  const d = parseDisplayDateToDate(trimmed);
+  if (!d) return trimmed;
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function clampDate(d: Date, minimumDate?: Date, maximumDate?: Date): Date {

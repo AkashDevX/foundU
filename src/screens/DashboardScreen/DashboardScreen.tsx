@@ -6,11 +6,11 @@ import {
   StatusBar,
   Pressable,
   Platform,
-  PermissionsAndroid,
   Linking,
   ScrollView,
   Image,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -26,41 +26,28 @@ import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/ma
 import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { getSessionAuthenticated } from '../../services/authSessionStorage';
+import { requestForegroundLocationPermission } from '../../services/locationPermissions';
 import {
   fetchTimeClockStatus,
   postClockIn,
   postClockOut,
   type TimeClockStatus,
 } from '../../services/timeClockApi';
+import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
 import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
+import {
+  DEFAULT_GEOFENCE_RADIUS_M,
+  formatZoneBadgeLabel,
+  haversineDistanceM,
+} from '../../utils/geofence';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
-
-const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
-function haversineDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371e3;
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-      { headers: { 'User-Agent': 'WorkforceApp/1.0' } }
+      { headers: { 'User-Agent': 'CruLynkApp/1.0' } }
     );
     const data = await res.json();
     return data?.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
@@ -85,16 +72,7 @@ function openMapsAt(lat: number, lng: number): void {
 }
 
 async function requestLocationPermission(): Promise<boolean> {
-  if (Platform.OS === 'android') {
-    const result = await PermissionsAndroid.requestMultiple([
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-    ]);
-    const fineGranted = result['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-    const coarseGranted = result['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-    return fineGranted || coarseGranted;
-  }
-  return true;
+  return requestForegroundLocationPermission();
 }
 
 function readCurrentPosition(): Promise<{ lat: number; lng: number; accuracyMeters: number | null }> {
@@ -120,14 +98,6 @@ function assignedCoordsFromProfile(profile: UserProfileSnapshot | null | undefin
   return { lat, lng };
 }
 
-function formatZoneBadgeLabel(distanceToSiteM: number, geofenceRadiusM: number): string {
-  if (distanceToSiteM <= geofenceRadiusM) {
-    return `In zone (${geofenceRadiusM} m)`;
-  }
-  const outsideM = Math.max(0, Math.round(distanceToSiteM - geofenceRadiusM));
-  return `Out of zone (${outsideM} m outside)`;
-}
-
 export function DashboardScreen() {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
@@ -139,6 +109,7 @@ export function DashboardScreen() {
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
   const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
@@ -178,7 +149,7 @@ export function DashboardScreen() {
 
   const distanceToSiteM = useMemo(() => {
     if (!userCoords || !assignedCoords) return null;
-    return haversineDistance(
+    return haversineDistanceM(
       userCoords.lat,
       userCoords.lng,
       assignedCoords.lat,
@@ -237,38 +208,63 @@ export function DashboardScreen() {
     [],
   );
 
-  const handleUpdateLocation = useCallback(async () => {
-    if (locationLoading) return;
+  const refreshDashboardData = useCallback(
+    async (opts?: { pullToRefresh?: boolean }) => {
+      const pullToRefresh = opts?.pullToRefresh === true;
+      if (pullToRefresh) {
+        if (refreshing) return;
+        setRefreshing(true);
+      } else if (locationLoading) {
+        return;
+      } else {
+        setLocationLoading(true);
+      }
+      setLocationError(null);
 
-    setLocationLoading(true);
-    setLocationError(null);
+      try {
+        const signedIn = await getSessionAuthenticated();
+        if (signedIn) {
+          const api = await refreshAndCacheAccountProfileFromApi();
+          if (api.ok) {
+            setAssignmentProfile(api.profile);
+            setWelcomeName(welcomeDisplayName(api.profile));
+          }
 
-    let profileSnapshot = assignmentProfile;
-    let radiusM = geofenceRadiusM;
-
-    try {
-      const signedIn = await getSessionAuthenticated();
-      if (signedIn) {
-        const api = await refreshAndCacheAccountProfileFromApi();
-        if (api.ok) {
-          profileSnapshot = api.profile;
-          setAssignmentProfile(api.profile);
+          const clock = await fetchTimeClockStatus();
+          if (clock.ok) {
+            setTimeClockStatus(clock.time_clock);
+            setIsClockedIn(clock.time_clock.is_clocked_in);
+            setGeofenceRadiusM(clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+            notifyTimeClockChange({
+              timeClock: clock.time_clock,
+              source: 'refresh',
+            });
+          }
+        } else {
+          const local = await loadAccountProfile();
+          setAssignmentProfile(local);
+          setWelcomeName(welcomeDisplayName(local));
         }
 
-        const clock = await fetchTimeClockStatus();
-        if (clock.ok) {
-          setTimeClockStatus(clock.time_clock);
-          setIsClockedIn(clock.time_clock.is_clocked_in);
-          radiusM = clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M;
-          setGeofenceRadiusM(radiusM);
+        await refreshDeviceLocation({ manageLoading: false });
+      } finally {
+        if (pullToRefresh) {
+          setRefreshing(false);
+        } else {
+          setLocationLoading(false);
         }
       }
+    },
+    [locationLoading, refreshDeviceLocation, refreshing],
+  );
 
-      await refreshDeviceLocation({ manageLoading: false });
-    } finally {
-      setLocationLoading(false);
-    }
-  }, [assignmentProfile, geofenceRadiusM, locationLoading, refreshDeviceLocation]);
+  const handleUpdateLocation = useCallback(() => {
+    void refreshDashboardData();
+  }, [refreshDashboardData]);
+
+  const handlePullToRefresh = useCallback(() => {
+    void refreshDashboardData({ pullToRefresh: true });
+  }, [refreshDashboardData]);
 
   useEffect(() => {
     void refreshDeviceLocation();
@@ -298,6 +294,14 @@ export function DashboardScreen() {
       })();
     }, []),
   );
+
+  useEffect(() => {
+    return subscribeTimeClockChange((event) => {
+      setTimeClockStatus(event.timeClock);
+      setIsClockedIn(event.timeClock.is_clocked_in);
+      setGeofenceRadiusM(event.timeClock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+    });
+  }, []);
 
   useEffect(() => {
     if (!mapTargetCoords || locationError || locationLoading) {
@@ -387,6 +391,11 @@ export function DashboardScreen() {
       setIsClockedIn(result.time_clock.is_clocked_in);
       setTimeClockStatus(result.time_clock);
       setGeofenceRadiusM(result.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+      notifyTimeClockChange({
+        timeClock: result.time_clock,
+        message: result.message,
+        source: 'manual',
+      });
       showClockAlert(
         result.time_clock.is_clocked_in ? 'Clocked in' : 'Clocked out',
         result.message,
@@ -419,7 +428,7 @@ export function DashboardScreen() {
             />
           </View>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Workforce</Text>
+        <Text style={styles.headerTitle}>CruLynk</Text>
         <TouchableOpacity
           style={styles.bellBtn}
           activeOpacity={0.7}
@@ -435,6 +444,14 @@ export function DashboardScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
         keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handlePullToRefresh}
+            colors={[colors.primary]}
+            tintColor={colors.primary}
+          />
+        }
       >
         <View style={styles.greetingCard}>
           <Text style={styles.greetingText}>Welcome back,</Text>

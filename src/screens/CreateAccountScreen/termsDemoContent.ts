@@ -5,7 +5,7 @@ export const TERMS_DEMO_SECTIONS: { title: string; body: string }[] = [
   {
     title: '1. Introduction',
     body:
-      'Welcome to FoundU Workforce. By creating an account and using this mobile application, you agree to these Terms and Conditions. Please read them carefully before completing your registration.',
+      'Welcome to CruLynk. By creating an account and using this mobile application, you agree to these Terms and Conditions. Please read them carefully before completing your registration.',
   },
   {
     title: '2. Eligibility',
@@ -15,7 +15,7 @@ export const TERMS_DEMO_SECTIONS: { title: string; body: string }[] = [
   {
     title: '3. Your account',
     body:
-      'You are responsible for keeping your login credentials secure and for all activity under your account. Notify your employer or FoundU support immediately if you suspect unauthorised access.',
+      'You are responsible for keeping your login credentials secure and for all activity under your account. Notify your employer or CruLynk support immediately if you suspect unauthorised access.',
   },
   {
     title: '4. Employment and payroll data',

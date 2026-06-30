@@ -5,7 +5,7 @@
  * (identify app via User-Agent, debounce client-side, avoid burst requests)
  */
 
-const USER_AGENT = 'WorkforceApp/1.0 (foundU)';
+const USER_AGENT = 'CruLynkApp/1.0';
 
 export type AddressSuggestion = {
   placeId: number;

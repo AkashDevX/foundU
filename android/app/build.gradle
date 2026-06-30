@@ -73,20 +73,32 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def windowsNinja = file("${rootProject.projectDir}/tools/ninja.exe")
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.foundu"
+    namespace "com.blugreenfac.crulynk"
     defaultConfig {
-        applicationId "com.foundu"
+        applicationId "com.blugreenfac.crulynk"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
         // Required by AndroidManifest `${usesCleartextTraffic}` — allows http:// to dev PC (emulator → Laravel).
         manifestPlaceholders = [usesCleartextTraffic: "true"]
+        externalNativeBuild {
+            cmake {
+                if (windowsNinja.exists()) {
+                    arguments "-DCMAKE_OBJECT_PATH_MAX=1024",
+                            "-DCMAKE_MAKE_PROGRAM=${windowsNinja.absolutePath.replace('\\', '/')}"
+                } else {
+                    arguments "-DCMAKE_OBJECT_PATH_MAX=1024"
+                }
+            }
+        }
     }
     signingConfigs {
         debug {

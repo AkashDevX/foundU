@@ -1,4 +1,4 @@
-package com.foundu
+package com.blugreenfac.crulynk
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

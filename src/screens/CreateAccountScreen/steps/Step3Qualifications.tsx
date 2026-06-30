@@ -17,6 +17,7 @@ import { SweetAlert } from '../../../components/SweetAlert';
 import {
   ThemedDatePickerField,
   addYears,
+  displayDateToIso,
   startOfToday,
 } from '../../../components/ThemedDatePickerField';
 import * as ImagePicker from 'react-native-image-picker';
@@ -284,29 +285,43 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
     }
     const licLine = licences
       .filter((l) => l.type)
-      .map((l) => `${l.type}${l.expiry ? ` (exp. ${l.expiry})` : ''}`)
+      .map((l) => {
+        const iso = displayDateToIso(l.expiry);
+        return `${l.type}${iso ? ` (exp. ${iso})` : ''}`;
+      })
       .join(' · ');
     const insLine = insurances
       .filter((i) => i.type)
-      .map((i) => `${i.type}${i.expiry ? ` (exp. ${i.expiry})` : ''}`)
+      .map((i) => {
+        const iso = displayDateToIso(i.expiry);
+        return `${i.type}${iso ? ` (exp. ${iso})` : ''}`;
+      })
       .join(' · ');
     const licencesJson = licences
       .filter((l) => l.type)
-      .map((l) => ({
-        id: l.id,
-        type: l.type,
-        expiry: l.expiry.trim(),
-        imageUploaded: Boolean(l.imageUri),
-      }));
+      .map((l) => {
+        const iso = displayDateToIso(l.expiry);
+        return {
+          id: l.id,
+          type: l.type,
+          expiry: iso,
+          expiry_date: iso,
+          imageUploaded: Boolean(l.imageUri),
+        };
+      });
 
     const insurancesJson = insurances
       .filter((i) => i.type)
-      .map((i) => ({
-        id: i.id,
-        type: i.type,
-        expiry: i.expiry.trim(),
-        imageUploaded: Boolean(i.imageUri),
-      }));
+      .map((i) => {
+        const iso = displayDateToIso(i.expiry);
+        return {
+          id: i.id,
+          type: i.type,
+          expiry: iso,
+          expiry_date: iso,
+          imageUploaded: Boolean(i.imageUri),
+        };
+      });
 
     const licenceUriById: Record<string, string> = {};
     for (const l of licences) {
@@ -322,9 +337,9 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
     }
 
     onNext({
-      policeCheckExpiry: policeCheck.expiry.trim() || undefined,
+      policeCheckExpiry: displayDateToIso(policeCheck.expiry) || undefined,
       policeCheckUploaded: policeCheck.imageUri ? 'Yes' : 'No',
-      fitToWorkExpiry: fitToWork.expiry.trim() || undefined,
+      fitToWorkExpiry: displayDateToIso(fitToWork.expiry) || undefined,
       fitToWorkUploaded: fitToWork.imageUri ? 'Yes' : 'No',
       licencesSummary: licLine || undefined,
       insurancesSummary: insLine || undefined,

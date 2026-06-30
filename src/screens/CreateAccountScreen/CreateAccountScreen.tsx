@@ -261,7 +261,7 @@ export function CreateAccountScreen() {
           </TouchableOpacity>
         </View>
         <Text style={styles.topBarTitle} numberOfLines={1}>
-          Workforce
+          CruLynk
         </Text>
         <View style={styles.topBarSideRight} />
       </View>

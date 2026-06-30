@@ -46,6 +46,7 @@ export function Step1PersonalProfile({
   initialProfilePhotoUri = null,
 }: Step1PersonalProfileProps) {
   const { companies, picklists, loading: bootstrapLoading } = useAppBootstrap();
+  const orgListLoading = bootstrapLoading && companies.length === 0;
   const maritalOptions = picklists.marital_status ?? [];
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -298,7 +299,7 @@ export function Step1PersonalProfile({
             <CompanyPicker
               variant="createAccount"
               companies={companies}
-              listingLoading={bootstrapLoading}
+              listingLoading={orgListLoading}
               value={companySlug}
               onChange={onCompanySlugChange}
             />

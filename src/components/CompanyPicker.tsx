@@ -95,6 +95,12 @@ export function CompanyPicker({
                   <ActivityIndicator color="#0056D2" />
                   <Text style={[caStyles.modalOptionText, { marginTop: spacing.md }]}>Loading…</Text>
                 </View>
+              ) : companies.length === 0 ? (
+                <View style={{ paddingVertical: spacing.xl, paddingHorizontal: spacing.lg }}>
+                  <Text style={[caStyles.modalOptionText, { textAlign: 'center' }]}>
+                    No organizations available. Check your connection and try again from the sign-in screen.
+                  </Text>
+                </View>
               ) : (
                 companies.map((c, idx) => (
                   <TouchableOpacity

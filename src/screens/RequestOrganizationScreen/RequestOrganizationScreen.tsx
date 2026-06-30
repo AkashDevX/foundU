@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,13 +13,21 @@ import {
   StyleSheet,
   useWindowDimensions,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
-import { spacing } from '../../theme/theme';
+import { colors, fontFamily, spacing } from '../../theme/theme';
 import { createAccountScreenStyles } from '../../styles/styles';
 import { useAppBootstrap } from '../../context/AppBootstrapContext';
+import { SweetAlert } from '../../components/SweetAlert';
+import { missingFieldsAlert } from '../CreateAccountScreen/validation';
+import { submitOrganizationRequest } from '../../services/requestOrganizationApi';
+import {
+  isOrganizationRequestFormComplete,
+  validateOrganizationRequestForm,
+} from '../../utils/organizationRequestValidation';
 
 const pickerModalStyles = StyleSheet.create({
   card: {
@@ -65,6 +73,15 @@ export function RequestOrganizationScreen() {
   const [companyEmail, setCompanyEmail] = useState('');
   const [telephone, setTelephone] = useState('');
   const [successVisible, setSuccessVisible] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    listItems?: string[];
+  } | null>(null);
+  const [submitErrorAlert, setSubmitErrorAlert] = useState<{ title: string; message: string } | null>(
+    null,
+  );
 
   const companyNameRef = useRef<TextInput>(null);
   const industryOtherRef = useRef<TextInput>(null);
@@ -74,9 +91,59 @@ export function RequestOrganizationScreen() {
   const companyEmailRef = useRef<TextInput>(null);
   const telephoneRef = useRef<TextInput>(null);
 
-  const handleSubmit = () => {
-    setSuccessVisible(true);
-  };
+  const formState = useMemo(
+    () => ({
+      companyName,
+      industry,
+      industryOther,
+      employeeBand,
+      employeeBandOther,
+      postcode,
+      fullName,
+      companyEmail,
+      telephone,
+    }),
+    [
+      companyName,
+      industry,
+      industryOther,
+      employeeBand,
+      employeeBandOther,
+      postcode,
+      fullName,
+      companyEmail,
+      telephone,
+    ],
+  );
+
+  const canSubmit = useMemo(() => isOrganizationRequestFormComplete(formState), [formState]);
+
+  const handleSubmit = useCallback(async () => {
+    if (submitting) return;
+
+    const validation = validateOrganizationRequestForm(formState);
+    if (!validation.ok) {
+      setBlockingAlert({
+        title: 'Complete required fields',
+        ...missingFieldsAlert(validation.missing),
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    const result = await submitOrganizationRequest(validation.payload);
+    setSubmitting(false);
+
+    if (result.ok) {
+      setSuccessVisible(true);
+      return;
+    }
+
+    setSubmitErrorAlert({
+      title: 'Could not submit',
+      message: result.message,
+    });
+  }, [formState, submitting]);
 
   const handleSuccessDismiss = () => {
     setSuccessVisible(false);
@@ -116,7 +183,7 @@ export function RequestOrganizationScreen() {
           <View style={styles.content}>
             <Text style={styles.title}>Register your organisation</Text>
             <Text style={styles.subtitle}>
-              If your company is not set up on Workforce yet, send us a few details and our team will contact you.
+              If your company is not set up on CruLynk yet, send us a few details and our team will contact you.
             </Text>
 
             <Text style={[styles.stepText, { marginBottom: spacing.md }]}>COMPANY</Text>
@@ -287,8 +354,13 @@ export function RequestOrganizationScreen() {
               />
             </Pressable>
 
-            <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={handleSubmit}>
-              <Text style={styles.saveBtnText}>Submit</Text>
+            <TouchableOpacity
+              style={[styles.saveBtn, (!canSubmit || submitting) && styles.saveBtnDisabled]}
+              activeOpacity={0.88}
+              onPress={handleSubmit}
+              disabled={submitting}
+            >
+              <Text style={styles.saveBtnText}>{submitting ? 'Submitting…' : 'Submit'}</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -360,6 +432,39 @@ export function RequestOrganizationScreen() {
         </View>
       </Modal>
 
+      <Modal visible={submitting} transparent animationType="fade">
+        <View
+          style={[
+            styles.successModalOverlay,
+            { backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
+          ]}
+        >
+          <View
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: 16,
+              paddingVertical: 28,
+              paddingHorizontal: 32,
+              alignItems: 'center',
+              maxWidth: 280,
+            }}
+          >
+            <ActivityIndicator size="large" color={colors.accent} />
+            <Text
+              style={{
+                marginTop: 16,
+                fontFamily: fontFamily.semiBold,
+                fontSize: 15,
+                color: '#374151',
+                textAlign: 'center',
+              }}
+            >
+              Sending your request…
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={successVisible} transparent animationType="fade">
         <Pressable style={styles.successModalOverlay}>
           <View style={styles.successModalCard}>
@@ -368,7 +473,8 @@ export function RequestOrganizationScreen() {
             </View>
             <Text style={styles.successModalTitle}>Thank you</Text>
             <Text style={styles.successModalMessage}>
-              We have received your details. Our team will be in touch with you shortly.
+              We have received your details. The CruLynk team will review your organisation request and be in touch
+              shortly.
             </Text>
             <TouchableOpacity style={styles.successModalBtn} onPress={handleSuccessDismiss} activeOpacity={0.85}>
               <Text style={styles.successModalBtnText}>Got it</Text>
@@ -376,6 +482,31 @@ export function RequestOrganizationScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <SweetAlert
+        visible={blockingAlert !== null}
+        title={blockingAlert?.title ?? ''}
+        message={blockingAlert?.message ?? ''}
+        listItems={blockingAlert?.listItems}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={() => setBlockingAlert(null)}
+        onConfirm={() => setBlockingAlert(null)}
+      />
+
+      <SweetAlert
+        visible={submitErrorAlert !== null}
+        title={submitErrorAlert?.title ?? ''}
+        message={submitErrorAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="error"
+        onClose={() => setSubmitErrorAlert(null)}
+        onConfirm={() => setSubmitErrorAlert(null)}
+      />
     </View>
   );
 }

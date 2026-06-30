@@ -9,8 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { AppBootstrapProvider, useAppBootstrap } from './src/context/AppBootstrapContext';
-import { FullScreenLoader } from './src/components/FullScreenLoader';
+import { AppBootstrapProvider } from './src/context/AppBootstrapContext';
 import { LoginScreen } from './src/screens/LoginScreen/LoginScreen';
 import { CreateAccountScreen } from './src/screens/CreateAccountScreen';
 import { RequestOrganizationScreen } from './src/screens/RequestOrganizationScreen';
@@ -31,11 +30,9 @@ const navigationTheme = {
 /**
  * Keeps NavigationContainer mounted at all times so screens (e.g. Login) are not mounted/unmounted
  * when bootstrap flips loading — avoiding "Rendered more hooks than during the previous render".
- * FullScreenLoader overlays until bootstrap completes.
+ * Login is always visible; organization list loads in the background on the login screen.
  */
 function NavigationRoot() {
-  const { loading } = useAppBootstrap();
-
   return (
     <NavigationContainer theme={navigationTheme}>
       <View style={styles.navShell}>
@@ -52,11 +49,6 @@ function NavigationRoot() {
           <Stack.Screen name="MyProfile" component={MyProfileScreen} />
           <Stack.Screen name="Main" component={MainTabs} />
         </Stack.Navigator>
-        {loading ? (
-          <View style={styles.bootstrapOverlay} pointerEvents="auto">
-            <FullScreenLoader variant="brand" message="Loading workforce data…" />
-          </View>
-        ) : null}
       </View>
     </NavigationContainer>
   );
@@ -76,11 +68,6 @@ function App() {
 
 const styles = StyleSheet.create({
   navShell: { flex: 1 },
-  bootstrapOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10000,
-    elevation: 10000,
-  },
 });
 
 export default App;

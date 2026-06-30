@@ -10,7 +10,7 @@
  * Tile policy: https://operations.osmfoundation.org/policies/tiles/
  */
 
-const USER_AGENT = 'WorkforceApp/1.0 (foundU; contact via app publisher)';
+const USER_AGENT = 'CruLynkApp/1.0 (contact via app publisher)';
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);

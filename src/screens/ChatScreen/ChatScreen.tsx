@@ -9,7 +9,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ListRenderItemInfo,
-  InteractionManager,
+  Keyboard,
+  Animated,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -21,56 +23,33 @@ import { colors, spacing } from '../../theme/theme';
 import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage';
 import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
+import { CHAT_FAQS, findFaqAnswer, type ChatFaq } from './chatFaqs';
 
 export type ChatMessage = {
   id: string;
   role: 'assistant' | 'user';
   text: string;
+  sentAt: number;
 };
 
-const WELCOME_ID = 'welcome';
+type ChatScreenProps = {
+  isTabActive?: boolean;
+};
+
 const ASSISTANT_ACCENT = '#004C99';
 
-const WELCOME_MESSAGE: ChatMessage = {
-  id: WELCOME_ID,
-  role: 'assistant',
-  text:
-    "Hi — I'm your Workforce assistant. I’ll help with FAQs, site safety basics, and how to use this app. Ask anything below, or tap a quick topic. (Smart AI replies will plug in here in a future update.)",
-};
-
-const PLACEHOLDER_ASSISTANT_REPLY =
-  'Thanks for your message. Full AI-powered answers are not connected yet — this screen is the chat UI only. Your questions will go to the assistant once it is enabled.';
-
-const FAQ_CHIPS: { id: string; label: string; userPrompt: string; assistantReply: string }[] = [
+const SEED_MESSAGES: ChatMessage[] = [
   {
-    id: 'faq-safety',
-    label: 'Site safety',
-    userPrompt: 'What should I know about site safety?',
-    assistantReply:
-      'General site safety: follow your site induction, wear required PPE, report hazards immediately, and use designated walkways. Your supervisor can give location-specific rules.',
-  },
-  {
-    id: 'faq-clock',
-    label: 'Clock in / out',
-    userPrompt: 'How do I clock in and out?',
-    assistantReply:
-      'Use the Dashboard clock button when you are on site. Your employer may require you to be in a geo-fenced zone — check with your manager if clock-in fails.',
-  },
-  {
-    id: 'faq-tasks',
-    label: 'Site tasks',
-    userPrompt: 'Where do I see my site tasks?',
-    assistantReply:
-      'Open the Tasks tab. It lists worksite actions like induction, equipment checks, and hazard reporting — not general HR or rostering.',
-  },
-  {
-    id: 'faq-report',
-    label: 'Report an issue',
-    userPrompt: 'How do I report a problem on site?',
-    assistantReply:
-      'Use Tasks or follow your site’s reporting process. For emergencies, use your site’s emergency procedures first — this app is not a replacement for emergency services.',
+    id: 'welcome',
+    role: 'assistant',
+    text:
+      "Hi — I'm your CruLynk assistant. Tap any FAQ below and I'll answer right away, or type your own question.",
+    sentAt: Date.now() - 1000 * 60 * 4,
   },
 ];
+
+const FALLBACK_REPLY =
+  "I don't have a specific answer for that yet. Try one of the FAQ buttons below — they cover safety, clock-in, shifts, tasks, and more.";
 
 let messageId = 0;
 function nextId(): string {
@@ -78,7 +57,88 @@ function nextId(): string {
   return `m-${Date.now()}-${messageId}`;
 }
 
-export function ChatScreen() {
+function formatMessageTime(sentAt: number): string {
+  const d = new Date(sentAt);
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function TypingIndicator() {
+  const dot1 = useRef(new Animated.Value(0.35)).current;
+  const dot2 = useRef(new Animated.Value(0.35)).current;
+  const dot3 = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    const pulse = (anim: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 320, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0.35, duration: 320, useNativeDriver: true }),
+        ]),
+      );
+
+    const a1 = pulse(dot1, 0);
+    const a2 = pulse(dot2, 120);
+    const a3 = pulse(dot3, 240);
+    a1.start();
+    a2.start();
+    a3.start();
+    return () => {
+      a1.stop();
+      a2.stop();
+      a3.stop();
+    };
+  }, [dot1, dot2, dot3]);
+
+  const styles = chatStyles;
+  return (
+    <View style={styles.typingRow}>
+      <View style={styles.assistantAvatarSmall}>
+        <Feather name="cpu" size={14} color={ASSISTANT_ACCENT} />
+      </View>
+      <View style={styles.typingBubble}>
+        {[dot1, dot2, dot3].map((opacity, i) => (
+          <Animated.View key={i} style={[styles.typingDot, { opacity }]} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+type FaqQuickBarProps = {
+  onSelect: (faq: ChatFaq) => void;
+  disabled: boolean;
+};
+
+function FaqQuickBar({ onSelect, disabled }: FaqQuickBarProps) {
+  const styles = chatStyles;
+  return (
+    <View style={styles.faqQuickBar}>
+      <Text style={styles.faqQuickBarLabel}>FAQs — tap for an instant answer</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.faqQuickScroll}
+        keyboardShouldPersistTaps="handled"
+      >
+        {CHAT_FAQS.map((faq) => (
+          <TouchableOpacity
+            key={faq.id}
+            style={styles.faqQuickChip}
+            onPress={() => onSelect(faq)}
+            activeOpacity={0.75}
+            disabled={disabled}
+          >
+            <Feather name={faq.icon} size={14} color={ASSISTANT_ACCENT} />
+            <Text style={styles.faqQuickChipText}>{faq.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
@@ -86,173 +146,276 @@ export function ChatScreen() {
   const headerStyles = dashboardStyles;
   const styles = chatStyles;
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
+  const [messages, setMessages] = useState<ChatMessage[]>(SEED_MESSAGES);
   const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
   const tabBarReserve = floatingTabBarClearance(insets.bottom);
-  const composerRowHeight = spacing.sm + 48 + spacing.sm;
-  const composerDockHeight = tabBarReserve + composerRowHeight;
+  const scrollPendingRef = useRef(false);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const scrollToBottom = useCallback((animated = true) => {
-    const scroll = () => {
-      listRef.current?.scrollToEnd({ animated });
-    };
-    InteractionManager.runAfterInteractions(() => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(scroll);
-      });
+  const scrollToLatest = useCallback((animated = true) => {
+    scrollPendingRef.current = true;
+    requestAnimationFrame(() => {
+      if (!listRef.current) return;
+      listRef.current.scrollToEnd({ animated });
+      scrollPendingRef.current = false;
     });
   }, []);
 
+  const onScrollToIndexFailed = useCallback(() => {
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+  }, []);
+
   useEffect(() => {
-    scrollToBottom(true);
-    const t = setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: false });
-    }, 120);
+    if (!isTabActive) return;
+    const t = setTimeout(() => scrollToLatest(false), 80);
     return () => clearTimeout(t);
-  }, [messages.length, scrollToBottom]);
+  }, [isTabActive, scrollToLatest]);
+
+  useEffect(() => {
+    scrollToLatest(true);
+  }, [messages.length, isTyping, scrollToLatest]);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => scrollToLatest(true),
+    );
+    return () => showSub.remove();
+  }, [scrollToLatest]);
+
+  useEffect(
+    () => () => {
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    },
+    [],
+  );
 
   const appendExchange = useCallback((userText: string, assistantText: string) => {
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', text: userText.trim() };
-    const botMsg: ChatMessage = { id: nextId(), role: 'assistant', text: assistantText };
-    setMessages((prev) => [...prev, userMsg, botMsg]);
-  }, []);
+    const trimmed = userText.trim();
+    if (!trimmed || isTyping) return;
+
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+
+    const userMsg: ChatMessage = { id: nextId(), role: 'user', text: trimmed, sentAt: Date.now() };
+    setMessages((prev) => [...prev, userMsg]);
+    setIsTyping(true);
+
+    const replyDelay = 500 + Math.min(trimmed.length * 6, 500);
+    typingTimerRef.current = setTimeout(() => {
+      const botMsg: ChatMessage = {
+        id: nextId(),
+        role: 'assistant',
+        text: assistantText,
+        sentAt: Date.now(),
+      };
+      setIsTyping(false);
+      setMessages((prev) => [...prev, botMsg]);
+      typingTimerRef.current = null;
+    }, replyDelay);
+  }, [isTyping]);
 
   const onSend = useCallback(() => {
     const t = inputText.trim();
-    if (!t) return;
+    if (!t || isTyping) return;
     setInputText('');
-    appendExchange(t, PLACEHOLDER_ASSISTANT_REPLY);
-  }, [inputText, appendExchange]);
+    appendExchange(t, findFaqAnswer(t) ?? FALLBACK_REPLY);
+  }, [inputText, isTyping, appendExchange]);
 
-  const onFaqChip = useCallback(
-    (chip: (typeof FAQ_CHIPS)[number]) => {
-      appendExchange(chip.userPrompt, chip.assistantReply);
+  const onFaqSelect = useCallback(
+    (faq: ChatFaq) => {
+      appendExchange(faq.question, faq.answer);
     },
     [appendExchange],
   );
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<ChatMessage>) => {
+    ({ item, index }: ListRenderItemInfo<ChatMessage>) => {
       const isUser = item.role === 'user';
+      const showDate =
+        index === 0 ||
+        new Date(item.sentAt).toDateString() !== new Date(messages[index - 1]?.sentAt ?? 0).toDateString();
+
       return (
-        <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
-          {isUser ? (
-            <View style={styles.bubbleUser}>
-              <Text style={styles.bubbleTextUser}>{item.text}</Text>
+        <View>
+          {showDate ? (
+            <View style={styles.datePillWrap}>
+              <View style={styles.datePill}>
+                <Text style={styles.datePillText}>
+                  {new Date(item.sentAt).toDateString() === new Date().toDateString()
+                    ? 'Today'
+                    : new Date(item.sentAt).toLocaleDateString(undefined, {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                </Text>
+              </View>
             </View>
-          ) : (
-            <View style={styles.bubbleAssistant}>
-              <Text style={styles.bubbleTextAssistant}>{item.text}</Text>
+          ) : null}
+          <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
+            {!isUser ? (
+              <View style={styles.assistantAvatarSmall}>
+                <Feather name="cpu" size={14} color={ASSISTANT_ACCENT} />
+              </View>
+            ) : null}
+            <View style={styles.messageContentCol}>
+              <View style={isUser ? styles.bubbleUser : styles.bubbleAssistant}>
+                <Text style={isUser ? styles.bubbleTextUser : styles.bubbleTextAssistant}>{item.text}</Text>
+              </View>
+              <Text style={[styles.bubbleMeta, isUser && styles.bubbleMetaUser]}>
+                {formatMessageTime(item.sentAt)}
+              </Text>
             </View>
-          )}
+          </View>
         </View>
       );
     },
-    [styles],
+    [styles, messages],
   );
 
   const listHeader = (
     <View style={styles.listHeaderWrap}>
-      <View style={styles.assistantBadge}>
-        <Feather name="zap" size={16} color={ASSISTANT_ACCENT} />
-        <Text style={styles.assistantBadgeText}>AI assistant · FAQs</Text>
-      </View>
-      <View style={styles.placeholderBanner}>
-        <Text style={styles.placeholderBannerText}>
-          You are using the chat layout only. Real AI / FAQ automation will be wired in later — messages
-          below use sample replies for now.
+      <View style={styles.heroCard}>
+        <View style={styles.heroIconWrap}>
+          <Feather name="message-circle" size={22} color={ASSISTANT_ACCENT} />
+        </View>
+        <Text style={styles.heroTitle}>Worksite assistant</Text>
+        <Text style={styles.heroSubtitle}>
+          Choose a FAQ below for an instant answer about safety, shifts, tasks, and more.
         </Text>
+        <View style={styles.heroStatusRow}>
+          <View style={styles.onlineDot} />
+          <Text style={styles.heroStatusText}>Ready to help</Text>
+        </View>
       </View>
-      <Text style={styles.faqSectionLabel}>Quick topics</Text>
+
+      <Text style={styles.faqSectionLabel}>Popular questions</Text>
       <View style={styles.faqGrid}>
-        {FAQ_CHIPS.map((chip) => (
+        {CHAT_FAQS.slice(0, 6).map((faq) => (
           <TouchableOpacity
-            key={chip.id}
+            key={faq.id}
             style={styles.faqChip}
-            onPress={() => onFaqChip(chip)}
+            onPress={() => onFaqSelect(faq)}
             activeOpacity={0.85}
+            disabled={isTyping}
           >
-            <Text style={styles.faqChipText}>{chip.label}</Text>
+            <View style={styles.faqChipIconWrap}>
+              <Feather name={faq.icon} size={16} color={ASSISTANT_ACCENT} />
+            </View>
+            <Text style={styles.faqChipText} numberOfLines={2}>
+              {faq.label}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
     </View>
   );
 
+  const listFooter = (
+    <View style={styles.listFooterWrap}>
+      {isTyping ? <TypingIndicator /> : null}
+      <View style={{ height: spacing.md }} />
+    </View>
+  );
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <View style={headerStyles.header}>
-        <TouchableOpacity
-          style={headerStyles.profileAvatarWrap}
-          onPress={() => navigation.navigate('MyProfile')}
-          activeOpacity={0.75}
-          accessibilityLabel="Open my profile"
-        >
-          <View style={headerStyles.profileAvatar}>
-            <ProfilePhotoAvatar
-              photoUri={getDisplayProfilePhotoUri(headerProfile)}
-              size={44}
-              iconSize={24}
-              iconColor={colors.primary}
-            />
+      <View style={[headerStyles.header, styles.chatHeader]}>
+        <View style={styles.headerSideSlot}>
+          <TouchableOpacity
+            style={headerStyles.profileAvatarWrap}
+            onPress={() => navigation.navigate('MyProfile')}
+            activeOpacity={0.75}
+            accessibilityLabel="Open my profile"
+          >
+            <View style={headerStyles.profileAvatar}>
+              <ProfilePhotoAvatar
+                photoUri={getDisplayProfilePhotoUri(headerProfile)}
+                size={44}
+                iconSize={24}
+                iconColor={colors.primary}
+              />
+            </View>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.chatHeaderTitle} numberOfLines={1}>
+            Assistant
+          </Text>
+          <View style={styles.headerSubtitleRow}>
+            <View style={styles.onlineDotSmall} />
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
+              Online · Site support
+            </Text>
           </View>
-        </TouchableOpacity>
-        <Text style={headerStyles.headerTitle}>Assistant</Text>
-        <TouchableOpacity
-          style={headerStyles.bellBtn}
-          activeOpacity={0.7}
-          onPress={openLogoutSweetAlert}
-          accessibilityLabel="Log out"
-        >
-          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
-        </TouchableOpacity>
+        </View>
+        <View style={styles.headerSideSlot}>
+          <TouchableOpacity
+            style={headerStyles.bellBtn}
+            activeOpacity={0.7}
+            onPress={openLogoutSweetAlert}
+            accessibilityLabel="Log out"
+          >
+            <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <KeyboardAvoidingView
         style={styles.keyboardFill}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <View style={styles.chatBody}>
           <FlatList
             ref={listRef}
             style={styles.messagesList}
-            contentContainerStyle={[
-              styles.messagesContent,
-              { paddingBottom: composerDockHeight + spacing.md },
-            ]}
+            contentContainerStyle={styles.messagesContent}
             data={messages}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
             ListHeaderComponent={listHeader}
+            ListFooterComponent={listFooter}
             showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="always"
-            onContentSizeChange={() => scrollToBottom(true)}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            onContentSizeChange={() => {
+              if (scrollPendingRef.current || isTyping || messages.length > SEED_MESSAGES.length) {
+                scrollToLatest(false);
+              }
+            }}
+            onScrollToIndexFailed={onScrollToIndexFailed}
           />
 
           <View style={[styles.composerDock, { paddingBottom: tabBarReserve }]}>
+            <FaqQuickBar onSelect={onFaqSelect} disabled={isTyping} />
             <View style={styles.composerRow}>
-              <TextInput
-                style={styles.inputField}
-                placeholder="Ask a question…"
-                placeholderTextColor="#9CA3AF"
-                value={inputText}
-                onChangeText={setInputText}
-                multiline={false}
-                maxLength={2000}
-                returnKeyType="send"
-                blurOnSubmit
-                onSubmitEditing={onSend}
-              />
+              <View style={styles.inputShell}>
+                <Feather name="edit-3" size={18} color="#9CA3AF" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.inputField}
+                  placeholder="Ask about safety, shifts, tasks…"
+                  placeholderTextColor="#9CA3AF"
+                  value={inputText}
+                  onChangeText={setInputText}
+                  multiline
+                  maxLength={2000}
+                  returnKeyType="default"
+                  blurOnSubmit={false}
+                  editable={!isTyping}
+                  onFocus={() => scrollToLatest(true)}
+                />
+              </View>
               <TouchableOpacity
-                style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
+                style={[styles.sendBtn, (!inputText.trim() || isTyping) && styles.sendBtnDisabled]}
                 onPress={onSend}
-                disabled={!inputText.trim()}
+                disabled={!inputText.trim() || isTyping}
                 accessibilityRole="button"
                 accessibilityLabel="Send message"
               >
-                <Feather name="send" size={20} color="#FFFFFF" />
+                <Feather name="send" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
           </View>
