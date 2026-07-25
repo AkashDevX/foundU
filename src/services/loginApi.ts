@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config/api';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
+import { tryParseApiJson } from '../utils/parseApiJson';
 
 /**
  * Employee sign-in against the company tenant DB.
@@ -103,12 +104,7 @@ export async function loginEmployee(params: {
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (res.ok) {
     return { ok: true, token: extractToken(parsed) };

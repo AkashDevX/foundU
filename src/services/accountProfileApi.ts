@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api';
+import { tryParseApiJson } from '../utils/parseApiJson';
 import type { UserProfileSnapshot } from '../types/userProfile';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile, saveAccountProfile } from './accountProfileStorage';
@@ -212,6 +213,59 @@ function parseShiftDays(v: unknown): string[] | undefined {
   return days.length ? days : undefined;
 }
 
+function parseShiftBreaks(v: unknown): UserProfileSnapshot['assignedShiftBreaks'] {
+  if (!Array.isArray(v)) return undefined;
+  const items: NonNullable<UserProfileSnapshot['assignedShiftBreaks']> = [];
+  for (const row of v) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const o = row as Record<string, unknown>;
+    const minutesRaw = o.minutes;
+    const minutes = typeof minutesRaw === 'number' ? minutesRaw : Number(minutesRaw);
+    if (!Number.isFinite(minutes) || minutes < 1) continue;
+    const paidRaw = o.paid;
+    const paid =
+      paidRaw === true ||
+      paidRaw === 1 ||
+      paidRaw === '1' ||
+      paidRaw === 'paid' ||
+      paidRaw === 'true';
+    const labelRaw = typeof o.label === 'string' ? o.label.trim() : '';
+    items.push({
+      label: labelRaw || (paid ? 'Paid break' : 'Unpaid break'),
+      minutes: Math.round(minutes),
+      paid,
+    });
+  }
+  return items.length ? items : undefined;
+}
+
+/**
+ * Parse auto-generated `breaks_summary` lines like:
+ * `15m paid Morning tea, 30m unpaid Lunch`
+ */
+function parseShiftBreaksFromSummary(summary: string | undefined): UserProfileSnapshot['assignedShiftBreaks'] {
+  if (!summary || summary.trim() === '') return undefined;
+  const items: NonNullable<UserProfileSnapshot['assignedShiftBreaks']> = [];
+  const re = /(\d+)\s*m\s+(paid|unpaid)\s+([^,]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(summary)) !== null) {
+    const minutes = Number(match[1]);
+    if (!Number.isFinite(minutes) || minutes < 1) continue;
+    const paid = match[2].toLowerCase() === 'paid';
+    const label = match[3].trim() || (paid ? 'Paid break' : 'Unpaid break');
+    items.push({ label, minutes: Math.round(minutes), paid });
+  }
+  return items.length ? items : undefined;
+}
+
+function firstAssignedShiftFromRow(row: Record<string, unknown>): Record<string, unknown> | null {
+  const list = row.assigned_shifts ?? row.assignedShifts;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const first = list[0];
+  if (!first || typeof first !== 'object' || Array.isArray(first)) return null;
+  return first as Record<string, unknown>;
+}
+
 function parseWeeklyAvailabilityJson(
   v: unknown,
 ): UserProfileSnapshot['weeklyAvailabilityJson'] {
@@ -299,6 +353,15 @@ export function mapMePayloadToUserProfile(
     !Array.isArray(assignment.work_location)
       ? (assignment.work_location as Record<string, unknown>)
       : null;
+  const assignedShiftsFirst = firstAssignedShiftFromRow(row);
+  const shiftBreaksSource = assignmentShift ?? assignedShiftsFirst;
+  const breaksSummary =
+    pickString(row, 'assigned_shift_breaks_summary', 'shift_breaks_summary') ??
+    pickString(shiftBreaksSource ?? {}, 'breaks_summary');
+  const assignedShiftBreaks =
+    parseShiftBreaks(row.assigned_shift_breaks) ??
+    parseShiftBreaks(shiftBreaksSource?.breaks) ??
+    parseShiftBreaksFromSummary(breaksSummary);
 
   return {
     companySlug: pickString(row, 'company_slug', 'companySlug') ?? undefined,
@@ -365,9 +428,8 @@ export function mapMePayloadToUserProfile(
     assignedDepartmentCode:
       pickString(row, 'assigned_department_code', 'department_code') ??
       pickString(assignmentDepartment ?? {}, 'code'),
-    assignedShiftBreaksSummary:
-      pickString(row, 'assigned_shift_breaks_summary', 'shift_breaks_summary') ??
-      pickString(assignmentShift ?? {}, 'breaks_summary'),
+    assignedShiftBreaksSummary: breaksSummary,
+    assignedShiftBreaks,
     assignedShiftNotes:
       pickString(row, 'assigned_shift_notes', 'shift_notes') ?? pickString(assignmentShift ?? {}, 'notes'),
     assignedWorkLocationNotes:
@@ -473,12 +535,7 @@ export async function fetchAuthenticatedAccountProfile(): Promise<FetchAccountPr
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (!res.ok) {
     return { ok: false, message: formatMeError(parsed, raw, res.status) };

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Native launch window shown while the JS bundle loads on cold start.
+  Navy background matches colors.primary and the JS FullScreenLoader, so the
+  transition into React is seamless (no blank flash). The launcher icon is
+  centered as a lightweight brand mark.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/app_primary" />
+    <item android:gravity="center">
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>

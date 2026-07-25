@@ -127,6 +127,14 @@ export function formatTimeHm(hm: string | undefined | null): string {
   return `${h}:${String(m).padStart(2, '0')} ${period}`;
 }
 
+/** Local calendar YYYY-MM-DD (avoid toISOString — UTC can shift the day). */
+function toLocalIsoDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = `${date.getMonth() + 1}`.padStart(2, '0');
+  const d = `${date.getDate()}`.padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function isPastWeek(weekStart: string): boolean {
   const current = mondayOfWeek();
   return weekStart < current;
@@ -137,5 +145,5 @@ export function mondayOfWeek(date: Date = new Date()): string {
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+  return toLocalIsoDate(d);
 }

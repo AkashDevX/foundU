@@ -19,12 +19,14 @@ import {
 import {
   fetchTimeClockStatus,
   postAutoClockOut,
+  resolveGeofenceRadiusM,
   type TimeClockStatus,
 } from '../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../services/timeClockEvents';
 import {
   DEFAULT_GEOFENCE_RADIUS_M,
   GEOFENCE_EXIT_CONFIRM_READINGS,
+  GEOFENCE_EXIT_MIN_DURATION_MS,
   GEOFENCE_POLL_INTERVAL_MS,
   isOutsideGeofence,
   type LatLng,
@@ -37,9 +39,19 @@ function assignedCoordsFromProfile(profile: Awaited<ReturnType<typeof loadAccoun
   return { lat, lng };
 }
 
+function siteCoordsFromTimeClock(timeClock: TimeClockStatus, fallback: LatLng | null): LatLng | null {
+  const session = timeClock.open_session;
+  const lat = session?.geofence_latitude;
+  const lng = session?.geofence_longitude;
+  if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { lat, lng };
+  }
+  return fallback;
+}
+
 /**
  * Monitors GPS while the employee is clocked in and auto-clocks out when they leave
- * the assigned work site geofence (100 m by default), including when the app is backgrounded.
+ * the assigned work site geofence (300 m by default), including when the app is backgrounded.
  */
 export function GeofenceAutoClockOutMonitor() {
   const [autoClockOutAlert, setAutoClockOutAlert] = useState<{
@@ -50,6 +62,7 @@ export function GeofenceAutoClockOutMonitor() {
   const monitoringRef = useRef(false);
   const autoClockOutInFlightRef = useRef(false);
   const outOfZoneStreakRef = useRef(0);
+  const outsideSinceMsRef = useRef<number | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clockStateRef = useRef<{
@@ -73,6 +86,11 @@ export function GeofenceAutoClockOutMonitor() {
     }
   }, [showAutoClockOutAlert]);
 
+  const resetOutsideTracking = useCallback(() => {
+    outOfZoneStreakRef.current = 0;
+    outsideSinceMsRef.current = null;
+  }, []);
+
   const clearWatch = useCallback(() => {
     if (watchIdRef.current !== null) {
       Geolocation.clearWatch(watchIdRef.current);
@@ -82,10 +100,10 @@ export function GeofenceAutoClockOutMonitor() {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
-    outOfZoneStreakRef.current = 0;
+    resetOutsideTracking();
     monitoringRef.current = false;
     void stopNativeLocationMonitoring();
-  }, []);
+  }, [resetOutsideTracking]);
 
   const handleAutoClockOutSuccess = useCallback(
     async (timeClock: TimeClockStatus, message: string) => {
@@ -123,12 +141,21 @@ export function GeofenceAutoClockOutMonitor() {
       const outside = isOutsideGeofence({ lat, lng }, siteCoords, radiusM, accuracyMeters);
 
       if (!outside) {
-        outOfZoneStreakRef.current = 0;
+        resetOutsideTracking();
         return;
       }
 
+      const now = Date.now();
+      if (outsideSinceMsRef.current == null) {
+        outsideSinceMsRef.current = now;
+      }
       outOfZoneStreakRef.current += 1;
-      if (outOfZoneStreakRef.current < GEOFENCE_EXIT_CONFIRM_READINGS) {
+
+      const outsideForMs = now - (outsideSinceMsRef.current ?? now);
+      if (
+        outOfZoneStreakRef.current < GEOFENCE_EXIT_CONFIRM_READINGS ||
+        outsideForMs < GEOFENCE_EXIT_MIN_DURATION_MS
+      ) {
         return;
       }
 
@@ -145,7 +172,8 @@ export function GeofenceAutoClockOutMonitor() {
             clockStateRef.current.isClockedIn = false;
             clearWatch();
           }
-          outOfZoneStreakRef.current = 0;
+          // still_within_geofence / outside hysteresis: keep monitoring, reset streak
+          resetOutsideTracking();
           return;
         }
 
@@ -154,7 +182,7 @@ export function GeofenceAutoClockOutMonitor() {
         autoClockOutInFlightRef.current = false;
       }
     },
-    [clearWatch, handleAutoClockOutSuccess],
+    [clearWatch, handleAutoClockOutSuccess, resetOutsideTracking],
   );
 
   const readCurrentPosition = useCallback(async () => {
@@ -175,6 +203,14 @@ export function GeofenceAutoClockOutMonitor() {
     );
   }, []);
 
+  const applyClockState = useCallback((timeClock: TimeClockStatus, siteCoords: LatLng) => {
+    clockStateRef.current = {
+      isClockedIn: true,
+      siteCoords,
+      radiusM: resolveGeofenceRadiusM(timeClock),
+    };
+  }, []);
+
   const startMonitoring = useCallback(
     async (timeClock: TimeClockStatus, siteCoords: LatLng) => {
       const backgroundGranted = await requestBackgroundLocationPermission();
@@ -182,18 +218,14 @@ export function GeofenceAutoClockOutMonitor() {
         backgroundGranted || (await requestForegroundLocationPermission());
       if (!foregroundGranted) return;
 
-      clockStateRef.current = {
-        isClockedIn: true,
-        siteCoords,
-        radiusM: timeClock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M,
-      };
+      applyClockState(timeClock, siteCoords);
 
       if (monitoringRef.current) {
         return;
       }
 
       monitoringRef.current = true;
-      outOfZoneStreakRef.current = 0;
+      resetOutsideTracking();
 
       await startNativeLocationMonitoring();
 
@@ -210,11 +242,10 @@ export function GeofenceAutoClockOutMonitor() {
         },
         {
           enableHighAccuracy: true,
-          distanceFilter: 10,
-          interval: 15000,
-          fastestInterval: 10000,
+          distanceFilter: 25,
+          interval: 20000,
+          fastestInterval: 15000,
           showsBackgroundLocationIndicator: true,
-          pauseUpdatesAutomatically: false,
         },
       );
 
@@ -234,7 +265,7 @@ export function GeofenceAutoClockOutMonitor() {
         })();
       }, GEOFENCE_POLL_INTERVAL_MS);
     },
-    [handlePositionSample, readCurrentPosition],
+    [applyClockState, handlePositionSample, readCurrentPosition, resetOutsideTracking],
   );
 
   const syncClockState = useCallback(async () => {
@@ -254,22 +285,21 @@ export function GeofenceAutoClockOutMonitor() {
       return;
     }
 
-    const siteCoords = assignedCoordsFromProfile(profile);
     const timeClock = clockResult.time_clock;
+    const siteCoords = siteCoordsFromTimeClock(
+      timeClock,
+      assignedCoordsFromProfile(profile),
+    );
 
     if (timeClock.is_clocked_in && siteCoords) {
-      clockStateRef.current = {
-        isClockedIn: true,
-        siteCoords,
-        radiusM: timeClock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M,
-      };
+      applyClockState(timeClock, siteCoords);
       await startMonitoring(timeClock, siteCoords);
       return;
     }
 
     clockStateRef.current.isClockedIn = false;
     clearWatch();
-  }, [clearWatch, startMonitoring]);
+  }, [applyClockState, clearWatch, startMonitoring]);
 
   useEffect(() => {
     void loadPendingAlert();
@@ -279,7 +309,10 @@ export function GeofenceAutoClockOutMonitor() {
       if (event.timeClock.is_clocked_in) {
         void (async () => {
           const profile = await loadAccountProfile();
-          const siteCoords = assignedCoordsFromProfile(profile);
+          const siteCoords = siteCoordsFromTimeClock(
+            event.timeClock,
+            assignedCoordsFromProfile(profile),
+          );
           if (siteCoords) {
             await startMonitoring(event.timeClock, siteCoords);
           }

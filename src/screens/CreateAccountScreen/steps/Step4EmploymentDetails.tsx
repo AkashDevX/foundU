@@ -31,6 +31,8 @@ import { TermsAndConditionsModal } from '../TermsAndConditionsModal';
 
 interface Step4EmploymentDetailsProps {
   onNext: RegistrationWizardNext;
+  /** Master DB company slug — used to load org-specific terms. */
+  companySlug: string | null;
   /** Increment when returning from a failed registration submit so password fields refocus. */
   focusPasswordSignal?: number;
   /** True while registration POST is running after tapping Complete. */
@@ -39,11 +41,16 @@ interface Step4EmploymentDetailsProps {
 
 export function Step4EmploymentDetails({
   onNext,
+  companySlug,
   focusPasswordSignal = 0,
   isSubmitting = false,
 }: Step4EmploymentDetailsProps) {
-  const { picklists } = useAppBootstrap();
+  const { picklists, companies } = useAppBootstrap();
   const transportOptions = picklists.transport_mode ?? [];
+  const selectedCompanyName =
+    companySlug != null
+      ? (companies.find((c) => c.slug === companySlug)?.name ?? null)
+      : null;
 
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
@@ -97,8 +104,7 @@ export function Step4EmploymentDetails({
     !isBlank(password) &&
     !isBlank(confirmPassword) &&
     acceptedTerms &&
-    (!isOwnVehicle ||
-      (!isBlank(vehicleRegistration) && !isBlank(vehicleExpiry) && Boolean(vehicleInsuranceUri)));
+    (!isOwnVehicle || (!isBlank(vehicleRegistration) && !isBlank(vehicleExpiry)));
 
   const vehicleExpiryMinDate = startOfToday();
   const vehicleExpiryMaxDate = addYears(vehicleExpiryMinDate, 15);
@@ -128,7 +134,6 @@ export function Step4EmploymentDetails({
     if (isOwnVehicle) {
       if (isBlank(vehicleRegistration)) missing.push('Vehicle registration');
       if (isBlank(vehicleExpiry)) missing.push('Vehicle expiry date');
-      if (!vehicleInsuranceUri) missing.push('Vehicle insurance document');
     }
     if (isBlank(password)) missing.push('Password');
     if (isBlank(confirmPassword)) missing.push('Confirm password');
@@ -161,7 +166,7 @@ export function Step4EmploymentDetails({
         modeOfTransport: modeOfTransport || undefined,
         vehicleRegistration: vehicleRegistration.trim() || undefined,
         vehicleExpiry: vehicleExpiry.trim() || undefined,
-        vehicleInsuranceUploaded: vehicleInsuranceUri ? 'Yes' : 'No',
+        vehicleInsuranceUploaded: vehicleInsuranceUri ? 'Yes' : undefined,
         password: password.trim(),
         password_confirmation: confirmPassword.trim(),
       },
@@ -212,7 +217,7 @@ export function Step4EmploymentDetails({
           </Text>
 
           <Text style={styles.fieldLabel}>Bank Details</Text>
-          <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Account name</Text>
+          <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Account name *</Text>
           <Pressable style={styles.input} onPress={() => accountNameRef.current?.focus()}>
             <TextInput
               ref={accountNameRef}
@@ -227,7 +232,7 @@ export function Step4EmploymentDetails({
               onSubmitEditing={() => accountNumberRef.current?.focus()}
             />
           </Pressable>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Account number</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Account number *</Text>
           <Pressable style={styles.input} onPress={() => accountNumberRef.current?.focus()}>
             <TextInput
               ref={accountNumberRef}
@@ -242,7 +247,7 @@ export function Step4EmploymentDetails({
               onSubmitEditing={() => branchCoderef.current?.focus()}
             />
           </Pressable>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Branch Code</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Branch Code *</Text>
           <Pressable style={styles.input} onPress={() => branchCoderef.current?.focus()}>
             <TextInput
               ref={branchCoderef}
@@ -257,7 +262,7 @@ export function Step4EmploymentDetails({
               onSubmitEditing={() => bankNameRef.current?.focus()}
             />
           </Pressable>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Bank name</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Bank name *</Text>
           <Pressable style={styles.input} onPress={() => bankNameRef.current?.focus()}>
             <TextInput
               ref={bankNameRef}
@@ -279,8 +284,8 @@ export function Step4EmploymentDetails({
             />
           </Pressable>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Mode of Transport</Text>
-          <Text style={styles.fieldHint}>If own vehicle – Registration, Expiry, Insurance required</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Mode of Transport *</Text>
+          <Text style={styles.fieldHint}>If own vehicle – Registration and expiry are required</Text>
           <TouchableOpacity
             style={[styles.input, { marginTop: spacing.sm }]}
             onPress={() => setShowTransportModal(true)}
@@ -295,7 +300,7 @@ export function Step4EmploymentDetails({
           {isOwnVehicle && (
             <View style={[styles.idDocCard, { marginTop: spacing.xl }]}>
               <Text style={styles.idDocCardLabel}>Vehicle Details</Text>
-              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Registration</Text>
+              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Registration *</Text>
               <Pressable style={styles.input} onPress={() => vehicleRegistrationRef.current?.focus()}>
                 <TextInput
                   ref={vehicleRegistrationRef}
@@ -310,7 +315,7 @@ export function Step4EmploymentDetails({
                   onSubmitEditing={() => Keyboard.dismiss()}
                 />
               </Pressable>
-              <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry</Text>
+              <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry *</Text>
               <ThemedDatePickerField
                 value={vehicleExpiry}
                 onChange={setVehicleExpiry}
@@ -357,7 +362,7 @@ export function Step4EmploymentDetails({
             </Pressable>
           </Modal>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Create account password</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Create account password *</Text>
           <Text style={styles.fieldHint}>Choose a password you'll use to sign in after approval.</Text>
           <Pressable style={[styles.input, { marginTop: spacing.sm }]} onPress={() => passwordRef.current?.focus()}>
             <TextInput
@@ -384,7 +389,7 @@ export function Step4EmploymentDetails({
             </TouchableOpacity>
           </Pressable>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Confirm password</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Confirm password *</Text>
           <Pressable style={styles.input} onPress={() => confirmPasswordRef.current?.focus()}>
             <TextInput
               ref={confirmPasswordRef}
@@ -426,6 +431,7 @@ export function Step4EmploymentDetails({
                 <Text style={styles.termsLink} onPress={() => setShowTermsModal(true)}>
                   Terms and conditions
                 </Text>
+                {' *'}
               </Text>
             </View>
           </View>
@@ -442,7 +448,12 @@ export function Step4EmploymentDetails({
         </View>
       </ScrollView>
 
-      <TermsAndConditionsModal visible={showTermsModal} onClose={() => setShowTermsModal(false)} />
+      <TermsAndConditionsModal
+        visible={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+        companySlug={companySlug}
+        companyName={selectedCompanyName}
+      />
 
       <SweetAlert
         visible={blockingAlert !== null}

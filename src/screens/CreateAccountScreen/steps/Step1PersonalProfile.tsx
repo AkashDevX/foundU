@@ -292,7 +292,9 @@ export function Step1PersonalProfile({
                 <Feather name={profilePhotoUri ? 'edit-2' : 'plus'} size={22} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.uploadLabel}>{profilePhotoUri ? 'Photo added — tap to change' : 'Upload Photo'}</Text>
+            <Text style={styles.uploadLabel}>
+              {profilePhotoUri ? 'Photo added — tap to change' : 'Upload Photo *'}
+            </Text>
           </View>
 
           <View style={styles.step1CompanyPickerWrap}>
@@ -305,7 +307,7 @@ export function Step1PersonalProfile({
             />
           </View>
 
-          <Text style={styles.fieldLabel}>Email address</Text>
+          <Text style={styles.fieldLabel}>Email address *</Text>
           <Pressable style={styles.input} onPress={() => emailRef.current?.focus()}>
             <TextInput
               ref={emailRef}
@@ -323,7 +325,7 @@ export function Step1PersonalProfile({
             />
           </Pressable>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Phone number</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Phone number *</Text>
           <Pressable style={styles.input} onPress={() => phoneRef.current?.focus()}>
             <TextInput
               ref={phoneRef}
@@ -339,7 +341,7 @@ export function Step1PersonalProfile({
             />
           </Pressable>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Full Legal Name</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Full Legal Name *</Text>
           <Pressable style={styles.input} onPress={() => fullLegalNameRef.current?.focus()}>
             <TextInput
               ref={fullLegalNameRef}
@@ -356,7 +358,7 @@ export function Step1PersonalProfile({
             />
           </Pressable>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Date of Birth</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Date of Birth *</Text>
           <ThemedDatePickerField
             value={dobDate ? formatDateToDisplay(dobDate) : ''}
             onChange={(s) => {
@@ -370,7 +372,7 @@ export function Step1PersonalProfile({
             defaultPickerDate={dobDefaultForPicker}
           />
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Sex</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Sex *</Text>
           <View style={styles.sexRow}>
             <TouchableOpacity
               style={[styles.sexOption, sex === 'male' && styles.sexOptionActive]}
@@ -388,7 +390,7 @@ export function Step1PersonalProfile({
             </TouchableOpacity>
           </View>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Marital Status</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Marital Status *</Text>
           <TouchableOpacity style={styles.input} onPress={() => setShowMaritalModal(true)} activeOpacity={0.8}>
             <Text style={[styles.inputField, !maritalStatus && { color: '#9CA3AF' }]}>
               {maritalStatus || 'Select marital status'}
@@ -416,7 +418,7 @@ export function Step1PersonalProfile({
             </Pressable>
           </Modal>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Address</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Address *</Text>
           <Text style={styles.addressSuggestHint}>
             Start typing — matching addresses are suggested (OpenStreetMap).
           </Text>
@@ -474,7 +476,7 @@ export function Step1PersonalProfile({
           </View>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Emergency Contact</Text>
-          <Text style={styles.fieldHint}>Name</Text>
+          <Text style={styles.fieldHint}>Name *</Text>
           <Pressable style={styles.input} onPress={() => emergencyNameRef.current?.focus()}>
             <TextInput
               ref={emergencyNameRef}
@@ -488,7 +490,7 @@ export function Step1PersonalProfile({
               onSubmitEditing={() => emergencyPhoneRef.current?.focus()}
             />
           </Pressable>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Phone</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Phone *</Text>
           <Pressable style={styles.input} onPress={() => emergencyPhoneRef.current?.focus()}>
             <TextInput
               ref={emergencyPhoneRef}
@@ -503,7 +505,7 @@ export function Step1PersonalProfile({
               onSubmitEditing={() => emergencyRelationshipRef.current?.focus()}
             />
           </Pressable>
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Relationship</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Relationship *</Text>
           <Pressable style={styles.input} onPress={() => emergencyRelationshipRef.current?.focus()}>
             <TextInput
               ref={emergencyRelationshipRef}

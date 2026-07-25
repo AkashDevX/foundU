@@ -48,7 +48,7 @@ export function displayDateToIso(display: string): string {
 }
 
 function clampDate(d: Date, minimumDate?: Date, maximumDate?: Date): Date {
-  let x = d;
+  let x = d instanceof Date && !Number.isNaN(d.getTime()) ? d : new Date();
   if (minimumDate && x < minimumDate) {
     x = new Date(minimumDate);
   }

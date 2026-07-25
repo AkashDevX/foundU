@@ -23,6 +23,15 @@ export async function saveAccountProfile(profile: UserProfileSnapshot): Promise<
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
 }
 
+/** Removes the cached profile — call on logout so the next user never sees stale name/photo. */
+export async function clearAccountProfile(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Greeting line under "Welcome back," — prefers full name from registration, then email local-part. */
 /** For avatars: use the server `profilePhotoUrl` if present, else the on-device `profilePhotoLocalUri` from registration. */
 export function getDisplayProfilePhotoUri(

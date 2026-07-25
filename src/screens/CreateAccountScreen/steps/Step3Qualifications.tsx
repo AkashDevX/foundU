@@ -118,13 +118,10 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
   const removeLicence = (id: string) => setLicences((prev) => prev.filter((l) => l.id !== id));
   const removeInsurance = (id: string) => setInsurances((prev) => prev.filter((i) => i.id !== id));
 
-  const isDocWithExpiryComplete = (doc: DocWithExpiry) => Boolean(doc.imageUri) && !isBlank(doc.expiry);
   const isLicenceComplete = (l: LicenceItem) => !isBlank(l.type) && Boolean(l.imageUri) && !isBlank(l.expiry);
   const isInsuranceComplete = (i: InsuranceItem) => !isBlank(i.type) && Boolean(i.imageUri) && !isBlank(i.expiry);
 
   const step3Complete =
-    isDocWithExpiryComplete(policeCheck) &&
-    isDocWithExpiryComplete(fitToWork) &&
     licences.every(isLicenceComplete) &&
     insurances.every(isInsuranceComplete);
 
@@ -165,12 +162,12 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
   const renderLicenceCard = (item: LicenceItem) => (
     <View key={item.id} style={styles.idDocCard}>
       <View style={styles.idDocCardHeader}>
-        <Text style={styles.idDocCardLabel}>Licence / Permit</Text>
+        <Text style={styles.idDocCardLabel}>Licence / Permit *</Text>
         <TouchableOpacity style={styles.idDocRemoveBtn} onPress={() => removeLicence(item.id)}>
           <Feather name="trash-2" size={18} color="#EF4444" />
         </TouchableOpacity>
       </View>
-      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Type</Text>
+      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Type *</Text>
       <TouchableOpacity
         style={[styles.input, { marginBottom: spacing.lg }]}
         onPress={() => {
@@ -184,7 +181,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         </Text>
         <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
       </TouchableOpacity>
-      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document</Text>
+      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document *</Text>
       <TouchableOpacity
         style={[styles.idDocUploadArea, item.imageUri && styles.idDocUploadAreaFilled]}
         onPress={() => pickImage((uri) => updateLicence(item.id, { imageUri: uri }))}
@@ -199,7 +196,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           </>
         )}
       </TouchableOpacity>
-      <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
+      <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date *</Text>
       <ThemedDatePickerField
         value={item.expiry}
         onChange={(expiry) => updateLicence(item.id, { expiry })}
@@ -213,12 +210,12 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
   const renderInsuranceCard = (item: InsuranceItem) => (
     <View key={item.id} style={styles.idDocCard}>
       <View style={styles.idDocCardHeader}>
-        <Text style={styles.idDocCardLabel}>Insurance</Text>
+        <Text style={styles.idDocCardLabel}>Insurance *</Text>
         <TouchableOpacity style={styles.idDocRemoveBtn} onPress={() => removeInsurance(item.id)}>
           <Feather name="trash-2" size={18} color="#EF4444" />
         </TouchableOpacity>
       </View>
-      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Type</Text>
+      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Type *</Text>
       <TouchableOpacity
         style={[styles.input, { marginBottom: spacing.lg }]}
         onPress={() => {
@@ -232,7 +229,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
         </Text>
         <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
       </TouchableOpacity>
-      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document</Text>
+      <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document *</Text>
       <TouchableOpacity
         style={[styles.idDocUploadArea, item.imageUri && styles.idDocUploadAreaFilled]}
         onPress={() => pickImage((uri) => updateInsurance(item.id, { imageUri: uri }))}
@@ -247,7 +244,7 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
           </>
         )}
       </TouchableOpacity>
-      <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date</Text>
+      <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Expiry date *</Text>
       <ThemedDatePickerField
         value={item.expiry}
         onChange={(expiry) => updateInsurance(item.id, { expiry })}
@@ -260,10 +257,6 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
 
   const handleSave = useCallback(() => {
     const missing: string[] = [];
-    if (!policeCheck.imageUri) missing.push('Police check document');
-    if (isBlank(policeCheck.expiry)) missing.push('Police check expiry date');
-    if (!fitToWork.imageUri) missing.push('Fit to work certificate');
-    if (isBlank(fitToWork.expiry)) missing.push('Fit to work expiry date');
 
     licences.forEach((l, idx) => {
       if (!isLicenceComplete(l)) {
@@ -338,9 +331,9 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
 
     onNext({
       policeCheckExpiry: displayDateToIso(policeCheck.expiry) || undefined,
-      policeCheckUploaded: policeCheck.imageUri ? 'Yes' : 'No',
+      policeCheckUploaded: policeCheck.imageUri ? 'Yes' : undefined,
       fitToWorkExpiry: displayDateToIso(fitToWork.expiry) || undefined,
-      fitToWorkUploaded: fitToWork.imageUri ? 'Yes' : 'No',
+      fitToWorkUploaded: fitToWork.imageUri ? 'Yes' : undefined,
       licencesSummary: licLine || undefined,
       insurancesSummary: insLine || undefined,
       licencesJson,
@@ -372,8 +365,8 @@ export function Step3Qualifications({ onNext }: Step3QualificationsProps) {
             Upload your licences, permits, certificates and compliance documents.
           </Text>
 
-          {renderDocCard('Police Check', policeCheck, setPoliceCheck, true)}
-          {renderDocCard('Fit to Work Certificate', fitToWork, setFitToWork, true)}
+          {renderDocCard('Police Check', policeCheck, setPoliceCheck)}
+          {renderDocCard('Fit to Work Certificate', fitToWork, setFitToWork)}
 
           <Text style={[styles.fieldLabel, styles.idDocSection]}>Licences & Permits</Text>
           <Text style={styles.fieldHint}>Add any relevant licences (e.g. RSA, Forklift, First Aid)</Text>

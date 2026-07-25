@@ -260,7 +260,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             Tell us about your work rights and identification so we can verify your eligibility.
           </Text>
 
-          <Text style={styles.fieldLabel}>Visa Status</Text>
+          <Text style={styles.fieldLabel}>Visa Status *</Text>
           <TouchableOpacity style={styles.input} onPress={() => setShowVisaModal(true)} activeOpacity={0.8}>
             <Text style={[styles.inputField, !visaStatus && { color: '#9CA3AF' }]}>
               {visaStatus || 'Select visa status'}
@@ -289,7 +289,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             </Pressable>
           </Modal>
 
-          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Unrestricted work rights in Australia</Text>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Unrestricted work rights in Australia *</Text>
           <View style={styles.sexRow}>
             <TouchableOpacity
               style={[styles.sexOption, hasUnrestrictedWorkRights === true && styles.sexOptionActive]}
@@ -313,7 +313,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
 
           {hasUnrestrictedWorkRights === false && (
             <>
-              <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Visa expiry date</Text>
+              <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Visa expiry date *</Text>
               <ThemedDatePickerField
                 value={visaExpiry}
                 onChange={setVisaExpiry}
@@ -324,19 +324,19 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             </>
           )}
 
-          <Text style={[styles.fieldLabel, styles.idDocSection]}>ID Information</Text>
+          <Text style={[styles.fieldLabel, styles.idDocSection]}>ID Information *</Text>
           <Text style={styles.fieldHint}>Driver's Licence, Passport, Medicare, 18+ Card (Minimum 2 required)</Text>
           {idDocuments.map((doc) => (
             <View key={doc.id} style={styles.idDocCard}>
               <View style={styles.idDocCardHeader}>
-                <Text style={styles.idDocCardLabel}>Document {idDocuments.indexOf(doc) + 1}</Text>
+                <Text style={styles.idDocCardLabel}>Document {idDocuments.indexOf(doc) + 1} *</Text>
                 {idDocuments.length > 2 && (
                   <TouchableOpacity style={styles.idDocRemoveBtn} onPress={() => removeIdDocument(doc.id)}>
                     <Feather name="trash-2" size={18} color="#EF4444" />
                   </TouchableOpacity>
                 )}
               </View>
-              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>ID Type</Text>
+              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>ID Type *</Text>
               <TouchableOpacity
                 style={[styles.input, { marginBottom: spacing.lg }]}
                 onPress={() => openIdTypeModal(doc.id)}
@@ -347,7 +347,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
                 </Text>
                 <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
               </TouchableOpacity>
-              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document / image</Text>
+              <Text style={[styles.fieldHint, { marginBottom: spacing.sm }]}>Upload document / image *</Text>
               <TouchableOpacity
                 style={[styles.idDocUploadArea, doc.imageUri && styles.idDocUploadAreaFilled]}
                 onPress={() => pickImageForDoc(doc.id)}
@@ -399,7 +399,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
           </Modal>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Availability</Text>
-          <Text style={styles.fieldHint}>Hours per week (target)</Text>
+          <Text style={styles.fieldHint}>Hours per week (target) *</Text>
           <Pressable style={styles.input} onPress={() => hoursPerWeekRef.current?.focus()}>
             <TextInput
               ref={hoursPerWeekRef}
@@ -414,7 +414,7 @@ export function Step2WorkEligibility({ onNext }: Step2WorkEligibilityProps) {
             />
           </Pressable>
 
-          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Weekly schedule</Text>
+          <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Weekly schedule *</Text>
           <View style={styles.scheduleCalendarCard}>
             <Text style={styles.scheduleCalendarTitle}>Tap days & time blocks</Text>
             <Text style={styles.scheduleCalendarHint}>

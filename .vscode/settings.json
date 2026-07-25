@@ -1,0 +1,17 @@
+{
+  // React Native ships its source as Flow-typed .js files (e.g.
+  // node_modules/react-native/.../RCTDeviceEventEmitter.js). The TS/JS language
+  // service can't parse Flow syntax and reports false "errors". Disabling JS
+  // validation silences that noise; TypeScript checking of .ts/.tsx is unaffected.
+  "javascript.validate.enable": false,
+
+  // Keep node_modules out of the editor's file watching / search to reduce noise.
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/android/.gradle/**": true,
+    "**/android/app/.cxx/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true
+  }
+}

@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import { CRULYNK_PLATFORM_SLUG } from '../config/platform';
 import type { OrganizationRequestPayload } from '../types/organizationRequest';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
+import { tryParseApiJson } from '../utils/parseApiJson';
 
 /**
  * Submit a new organisation access request to the master registry.
@@ -74,12 +75,7 @@ export async function submitOrganizationRequest(
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (res.ok) {
     return { ok: true };

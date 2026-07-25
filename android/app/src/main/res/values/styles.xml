@@ -7,8 +7,9 @@
         <item name="colorPrimaryDark">@color/app_primary_dark</item>
         <item name="colorAccent">@color/app_primary</item>
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
-        <!-- Avoid long white flash while JS / Metro loads (matches app header & theme primary) -->
-        <item name="android:windowBackground">@color/app_primary</item>
+        <!-- Branded launch window while JS / Metro loads: navy + centered app mark,
+             matching the JS FullScreenLoader for a seamless cold-start transition. -->
+        <item name="android:windowBackground">@drawable/launch_screen</item>
     </style>
 
 </resources>

@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import { DEFAULT_APP_TIMEZONE } from '../config/timezone';
 import type { EmployeeTask, TasksListPayload } from '../types/tasks';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
+import { tryParseApiJson } from '../utils/parseApiJson';
 import {
   normalizeTask,
   parseTasksPayload,
@@ -135,12 +136,7 @@ async function fetchTasksFromPrimaryEndpoint(
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (res.status === 404) return 'not_found';
   if (res.status === 401 || res.status === 403) {
@@ -252,12 +248,7 @@ async function updateTaskCompletionViaPost(
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (!res.ok) {
     return { ok: false, message: formatApiError(parsed, raw, true) };
@@ -305,12 +296,7 @@ export async function updateTaskCompletion(
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (res.status === 404 || res.status === 405) {
     return updateTaskCompletionViaPost(numericId, completed, auth.headers);

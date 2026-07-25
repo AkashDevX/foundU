@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import { SweetAlert } from '../components/SweetAlert';
 import { setAuthToken, setLastCompanySlug, setSessionAuthenticated } from '../services/authSessionStorage';
+import { clearAccountProfile } from '../services/accountProfileStorage';
 
 type LogoutSweetAlertContextValue = {
   openLogoutSweetAlert: () => void;
@@ -17,7 +18,12 @@ export function LogoutSweetAlertProvider({ children }: { children: React.ReactNo
 
   const onConfirm = useCallback(async () => {
     setVisible(false);
-    await Promise.all([setSessionAuthenticated(false), setAuthToken(null), setLastCompanySlug(null)]);
+    await Promise.all([
+      setSessionAuthenticated(false),
+      setAuthToken(null),
+      setLastCompanySlug(null),
+      clearAccountProfile(),
+    ]);
     navigation.dispatch(
       CommonActions.reset({
         index: 0,

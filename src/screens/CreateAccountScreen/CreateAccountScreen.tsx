@@ -21,6 +21,7 @@ import {
 } from '../../types/registrationUploads';
 import { loadAccountProfile, saveAccountProfile } from '../../services/accountProfileStorage';
 import { API_BASE_URL } from '../../config/api';
+import { tryParseApiJson } from '../../utils/parseApiJson';
 import { fontFamily as themeFontFamily } from '../../theme/theme';
 import { submitFoundURegistration } from '../../services/registerAccountApi';
 import { Step1PersonalProfile, Step2WorkEligibility, Step3Qualifications, Step4EmploymentDetails } from './steps';
@@ -140,12 +141,7 @@ export function CreateAccountScreen() {
         registrationUploadsRef.current,
       );
       const raw = await res.text();
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        /* plain text body */
-      }
+      const parsed = tryParseApiJson(raw);
 
       if (!res.ok) {
         const msg = formatRegistrationApiError(parsed, raw);
@@ -231,6 +227,7 @@ export function CreateAccountScreen() {
         return (
           <Step4EmploymentDetails
             onNext={goNext}
+            companySlug={companySlug}
             focusPasswordSignal={passwordFocusNonce}
             isSubmitting={isSubmitting}
           />

@@ -34,7 +34,7 @@ export async function requestBackgroundLocationPermission(): Promise<boolean> {
     return false;
   }
 
-  if (Platform.Version < 29) {
+  if (Number(Platform.Version) < 29) {
     return true;
   }
 

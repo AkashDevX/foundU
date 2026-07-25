@@ -9,8 +9,6 @@ import {
   RefreshControl,
   StyleSheet,
   LayoutAnimation,
-  Platform,
-  UIManager,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -30,10 +28,6 @@ type TasksScreenProps = {
   /** Set by MainTabs when this tab is the visible screen. */
   isTabActive?: boolean;
 };
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 type FilterKey = 'all' | 'pending' | 'completed';
 

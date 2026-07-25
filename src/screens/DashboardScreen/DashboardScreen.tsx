@@ -11,9 +11,12 @@ import {
   Image,
   ActivityIndicator,
   RefreshControl,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import Geolocation from 'react-native-geolocation-service';
 import Feather from 'react-native-vector-icons/Feather';
 import { SweetAlert } from '../../components/SweetAlert';
@@ -22,6 +25,7 @@ import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles } from '../../styles/styles';
 import { colors, spacing } from '../../theme/theme';
+import { API_BASE_URL } from '../../config/api';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
 import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
@@ -29,8 +33,11 @@ import { getSessionAuthenticated } from '../../services/authSessionStorage';
 import { requestForegroundLocationPermission } from '../../services/locationPermissions';
 import {
   fetchTimeClockStatus,
+  postBreakIn,
+  postBreakOut,
   postClockIn,
   postClockOut,
+  resolveGeofenceRadiusM,
   type TimeClockStatus,
 } from '../../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
@@ -39,9 +46,26 @@ import {
   DEFAULT_GEOFENCE_RADIUS_M,
   formatZoneBadgeLabel,
   haversineDistanceM,
+  isInsideGeofence,
 } from '../../utils/geofence';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
+
+/** True when an API failure looks like network / unreachable server (not a business rule). */
+function isConnectivityOrServerFailure(message: string): boolean {
+  return /could not reach|timed out|network request failed|failed to fetch|ECONNREFUSED|ENOTFOUND|unreachable|unable to connect|no (internet|network)|offline/i.test(
+    message,
+  );
+}
+
+function connectivityAlertMessage(raw: string): string {
+  const base =
+    'We could not reach the CruLynk server. Check your internet connection and try again.';
+  if (__DEV__) {
+    return `${base}\n\n${raw}\n\nAPI: ${API_BASE_URL}`;
+  }
+  return base;
+}
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
@@ -98,22 +122,95 @@ function assignedCoordsFromProfile(profile: UserProfileSnapshot | null | undefin
   return { lat, lng };
 }
 
-export function DashboardScreen() {
+function clockInFailureAlert(
+  code: string | undefined,
+  message: string,
+): { title: string; message: string; variant: NonNullable<SweetAlertProps['variant']> } {
+  if (code === 'no_scheduled_shift_today') {
+    return {
+      title: 'No shift today',
+      message: "You don't have any shifts today.",
+      variant: 'info',
+    };
+  }
+  if (code === 'outside_geofence') {
+    return {
+      title: 'Outside work site',
+      message,
+      variant: 'warning',
+    };
+  }
+  return {
+    title: 'Clock in failed',
+    message,
+    variant: 'error',
+  };
+}
+
+function shiftIssueAlert(
+  shiftIssue: string | null | undefined,
+): { title: string; message: string; variant: NonNullable<SweetAlertProps['variant']> } | null {
+  if (shiftIssue === 'no_scheduled_shift_today') {
+    return {
+      title: 'No shift today',
+      message: "You don't have any shifts today.",
+      variant: 'info',
+    };
+  }
+  return null;
+}
+
+/**
+ * Text for the shift pill under the clock button: while clocked in it shows when the shift ends,
+ * otherwise when it starts; falls back to a clear empty state when there's no shift today.
+ */
+function shiftPillLabel(
+  isClockedIn: boolean,
+  status: TimeClockStatus | null,
+  fallbackStart: string | null | undefined,
+): string {
+  const shift = status?.scheduled_shift;
+  if (isClockedIn && shift?.end_label) {
+    return `Shift ends at ${shift.end_label}`;
+  }
+  if (shift?.start_label) {
+    return `Shift starts at ${shift.start_label}`;
+  }
+  if (status?.shift_issue === 'no_scheduled_shift_today') {
+    return 'No shifts assigned today.';
+  }
+  if (fallbackStart) {
+    return `Shift starts at ${fallbackStart}`;
+  }
+  if (status) {
+    return 'No shifts assigned today.';
+  }
+  return 'Checking today’s shift…';
+}
+
+export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean }) {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [clockPunching, setClockPunching] = useState(false);
+  const [breakPunching, setBreakPunching] = useState(false);
   const [timeClockStatus, setTimeClockStatus] = useState<TimeClockStatus | null>(null);
   const [geofenceRadiusM, setGeofenceRadiusM] = useState(DEFAULT_GEOFENCE_RADIUS_M);
   const [locationAddress, setLocationAddress] = useState<string | null>(null);
-  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [userCoords, setUserCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracyMeters?: number | null;
+  } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
   const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
   const mapLoadSeq = useRef(0);
+  /** Avoid re-prompting the same outage every time the Dashboard tab remounts/activates. */
+  const connectivityAlertShownRef = useRef(false);
   const [welcomeName, setWelcomeName] = useState('there');
   const [assignmentProfile, setAssignmentProfile] = useState<UserProfileSnapshot | null>(null);
   const [clockAlert, setClockAlert] = useState<{
@@ -121,6 +218,10 @@ export function DashboardScreen() {
     message: string;
     variant: NonNullable<SweetAlertProps['variant']>;
   } | null>(null);
+  const [showClockOutModal, setShowClockOutModal] = useState(false);
+  const [clockOutComment, setClockOutComment] = useState('');
+  const isOnBreak = timeClockStatus?.is_on_break === true;
+  const punchBusy = clockPunching || breakPunching;
 
   const showClockAlert = useCallback(
     (title: string, message: string, variant: NonNullable<SweetAlertProps['variant']>) => {
@@ -130,6 +231,21 @@ export function DashboardScreen() {
   );
 
   const dismissClockAlert = useCallback(() => setClockAlert(null), []);
+
+  /** Surfaces network / unreachable-server failures on Dashboard (open + pull-to-refresh). */
+  const showConnectivityAlert = useCallback(
+    (message: string, opts?: { force?: boolean }) => {
+      if (!isConnectivityOrServerFailure(message)) {
+        return;
+      }
+      if (!opts?.force && connectivityAlertShownRef.current) {
+        return;
+      }
+      connectivityAlertShownRef.current = true;
+      showClockAlert("Can't reach server", connectivityAlertMessage(message), 'error');
+    },
+    [showClockAlert],
+  );
 
   const styles = dashboardStyles;
   const scrollBottomPad = floatingTabBarClearance(insets.bottom) + spacing.lg;
@@ -144,28 +260,53 @@ export function DashboardScreen() {
     [assignmentProfile],
   );
 
-  const mapTargetCoords = assignedCoords ?? userCoords;
+  const geofenceSiteCoords = useMemo(() => {
+    const session = timeClockStatus?.open_session;
+    const lat = session?.geofence_latitude;
+    const lng = session?.geofence_longitude;
+    if (
+      isClockedIn &&
+      typeof lat === 'number' &&
+      typeof lng === 'number' &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lng)
+    ) {
+      return { lat, lng };
+    }
+    return assignedCoords;
+  }, [assignedCoords, isClockedIn, timeClockStatus?.open_session]);
+
+  const mapTargetCoords = geofenceSiteCoords ?? userCoords;
   const mapTargetAddress = assignmentProfile?.assignedWorkLocationAddress ?? locationAddress;
 
   const distanceToSiteM = useMemo(() => {
-    if (!userCoords || !assignedCoords) return null;
+    if (!userCoords || !geofenceSiteCoords) return null;
     return haversineDistanceM(
       userCoords.lat,
       userCoords.lng,
-      assignedCoords.lat,
-      assignedCoords.lng,
+      geofenceSiteCoords.lat,
+      geofenceSiteCoords.lng,
     );
-  }, [userCoords, assignedCoords]);
+  }, [userCoords, geofenceSiteCoords]);
 
   const isInZone = useMemo(() => {
-    if (distanceToSiteM === null) return null;
-    return distanceToSiteM <= geofenceRadiusM;
-  }, [distanceToSiteM, geofenceRadiusM]);
+    if (!userCoords || !geofenceSiteCoords) return null;
+    return isInsideGeofence(
+      { lat: userCoords.lat, lng: userCoords.lng },
+      geofenceSiteCoords,
+      geofenceRadiusM,
+      userCoords.accuracyMeters,
+    );
+  }, [userCoords, geofenceSiteCoords, geofenceRadiusM]);
 
   const zoneBadgeLabel = useMemo(() => {
     if (distanceToSiteM === null) return null;
-    return formatZoneBadgeLabel(distanceToSiteM, geofenceRadiusM);
-  }, [distanceToSiteM, geofenceRadiusM]);
+    return formatZoneBadgeLabel(
+      distanceToSiteM,
+      geofenceRadiusM,
+      userCoords?.accuracyMeters,
+    );
+  }, [distanceToSiteM, geofenceRadiusM, userCoords?.accuracyMeters]);
 
   const openAppSettings = useCallback(() => {
     Linking.openSettings();
@@ -191,7 +332,11 @@ export function DashboardScreen() {
         }
 
         const position = await readCurrentPosition();
-        setUserCoords({ lat: position.lat, lng: position.lng });
+        setUserCoords({
+          lat: position.lat,
+          lng: position.lng,
+          accuracyMeters: position.accuracyMeters,
+        });
         const address = await reverseGeocode(position.lat, position.lng);
         setLocationAddress(address);
       } catch (err: unknown) {
@@ -224,21 +369,33 @@ export function DashboardScreen() {
       try {
         const signedIn = await getSessionAuthenticated();
         if (signedIn) {
+          let connectivityError: string | null = null;
+
           const api = await refreshAndCacheAccountProfileFromApi();
           if (api.ok) {
             setAssignmentProfile(api.profile);
             setWelcomeName(welcomeDisplayName(api.profile));
+          } else if (isConnectivityOrServerFailure(api.message)) {
+            connectivityError = api.message;
           }
 
           const clock = await fetchTimeClockStatus();
           if (clock.ok) {
             setTimeClockStatus(clock.time_clock);
             setIsClockedIn(clock.time_clock.is_clocked_in);
-            setGeofenceRadiusM(clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+            setGeofenceRadiusM(resolveGeofenceRadiusM(clock.time_clock));
             notifyTimeClockChange({
               timeClock: clock.time_clock,
               source: 'refresh',
             });
+          } else if (!connectivityError && isConnectivityOrServerFailure(clock.message)) {
+            connectivityError = clock.message;
+          }
+
+          if (connectivityError) {
+            showConnectivityAlert(connectivityError, { force: pullToRefresh });
+          } else if (api.ok || clock.ok) {
+            connectivityAlertShownRef.current = false;
           }
         } else {
           const local = await loadAccountProfile();
@@ -255,7 +412,7 @@ export function DashboardScreen() {
         }
       }
     },
-    [locationLoading, refreshDeviceLocation, refreshing],
+    [locationLoading, refreshDeviceLocation, refreshing, showConnectivityAlert],
   );
 
   const handleUpdateLocation = useCallback(() => {
@@ -267,44 +424,60 @@ export function DashboardScreen() {
   }, [refreshDashboardData]);
 
   useEffect(() => {
+    if (!isTabActive) return;
     void refreshDeviceLocation();
-  }, [refreshDeviceLocation]);
+  }, [isTabActive, refreshDeviceLocation]);
 
-  useFocusEffect(
-    useCallback(() => {
-      void (async () => {
-        const local = await loadAccountProfile();
-        setWelcomeName(welcomeDisplayName(local));
-        setAssignmentProfile(local);
-        const signedIn = await getSessionAuthenticated();
-        if (!signedIn) {
-          setIsClockedIn(false);
-          setTimeClockStatus(null);
-          return;
-        }
-        const api = await refreshAndCacheAccountProfileFromApi();
-        if (api.ok) setAssignmentProfile(api.profile);
+  useEffect(() => {
+    if (!isTabActive) return;
+    void (async () => {
+      const local = await loadAccountProfile();
+      setWelcomeName(welcomeDisplayName(local));
+      setAssignmentProfile(local);
+      const signedIn = await getSessionAuthenticated();
+      if (!signedIn) {
+        setIsClockedIn(false);
+        setTimeClockStatus(null);
+        return;
+      }
 
-        const clock = await fetchTimeClockStatus();
-        if (clock.ok) {
-          setTimeClockStatus(clock.time_clock);
-          setIsClockedIn(clock.time_clock.is_clocked_in);
-          setGeofenceRadiusM(clock.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
-        }
-      })();
-    }, []),
-  );
+      let connectivityError: string | null = null;
+
+      const api = await refreshAndCacheAccountProfileFromApi();
+      if (api.ok) {
+        setAssignmentProfile(api.profile);
+        setWelcomeName(welcomeDisplayName(api.profile));
+      } else if (isConnectivityOrServerFailure(api.message)) {
+        connectivityError = api.message;
+      }
+
+      const clock = await fetchTimeClockStatus();
+      if (clock.ok) {
+        setTimeClockStatus(clock.time_clock);
+        setIsClockedIn(clock.time_clock.is_clocked_in);
+        setGeofenceRadiusM(resolveGeofenceRadiusM(clock.time_clock));
+      } else if (!connectivityError && isConnectivityOrServerFailure(clock.message)) {
+        connectivityError = clock.message;
+      }
+
+      if (connectivityError) {
+        showConnectivityAlert(connectivityError);
+      } else if (api.ok || clock.ok) {
+        connectivityAlertShownRef.current = false;
+      }
+    })();
+  }, [isTabActive, showConnectivityAlert]);
 
   useEffect(() => {
     return subscribeTimeClockChange((event) => {
       setTimeClockStatus(event.timeClock);
       setIsClockedIn(event.timeClock.is_clocked_in);
-      setGeofenceRadiusM(event.timeClock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(event.timeClock));
     });
   }, []);
 
   useEffect(() => {
-    if (!mapTargetCoords || locationError || locationLoading) {
+    if (!isTabActive || !mapTargetCoords || locationError || locationLoading) {
       return;
     }
 
@@ -321,10 +494,10 @@ export function DashboardScreen() {
         if (seq !== mapLoadSeq.current) return;
         setMapPreviewLoading(false);
       });
-  }, [mapTargetCoords, locationError, locationLoading]);
+  }, [isTabActive, mapTargetCoords, locationError, locationLoading]);
 
-  const handleClockIn = async () => {
-    if (clockPunching) return;
+  const handleClockPunch = async () => {
+    if (punchBusy) return;
 
     const signedIn = await getSessionAuthenticated();
     if (!signedIn) {
@@ -336,7 +509,18 @@ export function DashboardScreen() {
       return;
     }
 
-    if (!isClockedIn && timeClockStatus && !timeClockStatus.can_clock_in) {
+    if (isClockedIn) {
+      setClockOutComment('');
+      setShowClockOutModal(true);
+      return;
+    }
+
+    if (timeClockStatus && !timeClockStatus.can_clock_in) {
+      const shiftAlert = shiftIssueAlert(timeClockStatus.shift_issue);
+      if (shiftAlert) {
+        showClockAlert(shiftAlert.title, shiftAlert.message, shiftAlert.variant);
+        return;
+      }
       if (timeClockStatus.assignment_not_ready_reason === 'no_work_location_assigned') {
         showClockAlert(
           'No work site assigned',
@@ -355,6 +539,10 @@ export function DashboardScreen() {
       return;
     }
 
+    await performClockIn();
+  };
+
+  const performClockIn = async () => {
     setClockPunching(true);
     try {
       const granted = await requestLocationPermission();
@@ -368,7 +556,11 @@ export function DashboardScreen() {
       }
 
       const position = await readCurrentPosition();
-      setUserCoords({ lat: position.lat, lng: position.lng });
+      setUserCoords({
+        lat: position.lat,
+        lng: position.lng,
+        accuracyMeters: position.accuracyMeters,
+      });
       const address = await reverseGeocode(position.lat, position.lng);
       setLocationAddress(address);
 
@@ -378,34 +570,145 @@ export function DashboardScreen() {
         accuracy_meters: position.accuracyMeters,
       };
 
-      const result = isClockedIn ? await postClockOut(coords) : await postClockIn(coords);
+      const result = await postClockIn(coords);
       if (!result.ok) {
-        showClockAlert(
-          isClockedIn ? 'Clock out failed' : 'Clock in failed',
-          result.message,
-          'error',
-        );
+        const alert = clockInFailureAlert(result.code, result.message);
+        showClockAlert(alert.title, alert.message, alert.variant);
         return;
       }
 
       setIsClockedIn(result.time_clock.is_clocked_in);
       setTimeClockStatus(result.time_clock);
-      setGeofenceRadiusM(result.time_clock.geofence_radius_meters || DEFAULT_GEOFENCE_RADIUS_M);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
       notifyTimeClockChange({
         timeClock: result.time_clock,
         message: result.message,
         source: 'manual',
       });
-      showClockAlert(
-        result.time_clock.is_clocked_in ? 'Clocked in' : 'Clocked out',
-        result.message,
-        'success',
-      );
+      showClockAlert('Clocked in', result.message, 'success');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not read GPS location.';
       showClockAlert('Location error', message, 'error');
     } finally {
       setClockPunching(false);
+    }
+  };
+
+  const performClockOut = async () => {
+    setShowClockOutModal(false);
+    setClockPunching(true);
+    try {
+      const granted = await requestLocationPermission();
+      if (!granted) {
+        showClockAlert(
+          'Location required',
+          'Allow location access so we can verify you are at your assigned work site.',
+          'info',
+        );
+        return;
+      }
+
+      const position = await readCurrentPosition();
+      setUserCoords({
+        lat: position.lat,
+        lng: position.lng,
+        accuracyMeters: position.accuracyMeters,
+      });
+      const address = await reverseGeocode(position.lat, position.lng);
+      setLocationAddress(address);
+
+      const coords = {
+        latitude: position.lat,
+        longitude: position.lng,
+        accuracy_meters: position.accuracyMeters,
+      };
+
+      const trimmedComment = clockOutComment.trim();
+      const result = await postClockOut(coords, trimmedComment || undefined);
+      if (!result.ok) {
+        showClockAlert('Clock out failed', result.message, 'error');
+        return;
+      }
+
+      setClockOutComment('');
+      setIsClockedIn(result.time_clock.is_clocked_in);
+      setTimeClockStatus(result.time_clock);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
+      notifyTimeClockChange({
+        timeClock: result.time_clock,
+        message: result.message,
+        source: 'manual',
+      });
+      showClockAlert('Clocked out', result.message, 'success');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not read GPS location.';
+      showClockAlert('Location error', message, 'error');
+    } finally {
+      setClockPunching(false);
+    }
+  };
+
+  const handleBreakPunch = async () => {
+    if (clockPunching || breakPunching || !isClockedIn) return;
+
+    const signedIn = await getSessionAuthenticated();
+    if (!signedIn) {
+      showClockAlert(
+        'Sign in required',
+        'Please sign in before using the time clock.',
+        'info',
+      );
+      return;
+    }
+
+    const onBreak = timeClockStatus?.is_on_break === true;
+    setBreakPunching(true);
+    try {
+      const granted = await requestLocationPermission();
+      if (!granted) {
+        showClockAlert(
+          'Location required',
+          'Allow location access so we can verify you are at your assigned work site.',
+          'info',
+        );
+        return;
+      }
+
+      const position = await readCurrentPosition();
+      setUserCoords({
+        lat: position.lat,
+        lng: position.lng,
+        accuracyMeters: position.accuracyMeters,
+      });
+      const address = await reverseGeocode(position.lat, position.lng);
+      setLocationAddress(address);
+
+      const coords = {
+        latitude: position.lat,
+        longitude: position.lng,
+        accuracy_meters: position.accuracyMeters,
+      };
+
+      const result = onBreak ? await postBreakOut(coords) : await postBreakIn(coords);
+      if (!result.ok) {
+        showClockAlert(onBreak ? 'Break out failed' : 'Break in failed', result.message, 'error');
+        return;
+      }
+
+      setIsClockedIn(result.time_clock.is_clocked_in);
+      setTimeClockStatus(result.time_clock);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
+      notifyTimeClockChange({
+        timeClock: result.time_clock,
+        message: result.message,
+        source: 'manual',
+      });
+      showClockAlert(onBreak ? 'Break ended' : 'Break started', result.message, 'success');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not read GPS location.';
+      showClockAlert('Location error', message, 'error');
+    } finally {
+      setBreakPunching(false);
     }
   };
 
@@ -475,9 +778,19 @@ export function DashboardScreen() {
           />
           <Text style={styles.statusLabel}>CURRENT STATUS</Text>
           <View style={styles.statusRow}>
-            <View style={[styles.statusDot, isClockedIn ? styles.statusDotIn : styles.statusDotOut]} />
-            <Text style={[styles.statusText, isClockedIn ? styles.statusTextIn : styles.statusTextOut]}>
-              {isClockedIn ? 'Clocked In' : 'Not Clocked In'}
+            <View
+              style={[
+                styles.statusDot,
+                isOnBreak ? styles.statusDotBreak : isClockedIn ? styles.statusDotIn : styles.statusDotOut,
+              ]}
+            />
+            <Text
+              style={[
+                styles.statusText,
+                isOnBreak ? styles.statusTextBreak : isClockedIn ? styles.statusTextIn : styles.statusTextOut,
+              ]}
+            >
+              {isOnBreak ? 'On Break' : isClockedIn ? 'Clocked In' : 'Not Clocked In'}
             </Text>
           </View>
           {isClockedIn && timeClockStatus?.open_session?.clocked_in_at ? (
@@ -485,10 +798,19 @@ export function DashboardScreen() {
               Since {formatInstantInAppTimezone(timeClockStatus.open_session.clocked_in_at)}
             </Text>
           ) : null}
+          {isOnBreak && timeClockStatus?.open_session?.break_started_at ? (
+            <Text style={styles.breakSinceText}>
+              Break since {formatInstantInAppTimezone(timeClockStatus.open_session.break_started_at)}
+            </Text>
+          ) : null}
           <Pressable
-            style={[styles.clockInBtn, isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut]}
-            onPress={() => void handleClockIn()}
-            disabled={clockPunching}
+            style={[
+              styles.clockInBtn,
+              isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut,
+              !isClockedIn ? styles.clockInBtnSolo : null,
+            ]}
+            onPress={() => void handleClockPunch()}
+            disabled={punchBusy}
           >
             {clockPunching ? (
               <ActivityIndicator
@@ -508,12 +830,35 @@ export function DashboardScreen() {
               {isClockedIn ? 'Clock Out' : 'Clock In'}
             </Text>
           </Pressable>
+          {isClockedIn ? (
+            <Pressable
+              style={[styles.breakBtn, isOnBreak ? styles.breakBtnOut : styles.breakBtnIn]}
+              onPress={() => void handleBreakPunch()}
+              disabled={punchBusy}
+              accessibilityLabel={isOnBreak ? 'Break out' : 'Break in'}
+            >
+              {breakPunching ? (
+                <ActivityIndicator size="small" color={isOnBreak ? '#92400E' : '#1E3A5F'} />
+              ) : (
+                <Feather
+                  name={isOnBreak ? 'play' : 'coffee'}
+                  size={18}
+                  color={isOnBreak ? '#92400E' : '#1E3A5F'}
+                />
+              )}
+              <Text style={[styles.breakBtnText, isOnBreak ? styles.breakBtnTextOut : styles.breakBtnTextIn]}>
+                {isOnBreak ? 'Break Out' : 'Break In'}
+              </Text>
+            </Pressable>
+          ) : null}
           <View style={[styles.shiftPill, isClockedIn ? styles.shiftPillIn : styles.shiftPillOut]}>
             <Feather name="clock" size={20} color="#FFFFFF" />
             <Text style={styles.shiftPillText}>
-              {assignmentProfile?.assignedShiftStartTime
-                ? `Shift starts at ${assignmentProfile.assignedShiftStartTime}`
-                : 'Shift start time unavailable'}
+              {shiftPillLabel(
+                isClockedIn,
+                timeClockStatus,
+                assignmentProfile?.assignedShiftStartTime,
+              )}
             </Text>
           </View>
         </View>
@@ -521,9 +866,9 @@ export function DashboardScreen() {
         <View style={styles.locationCard}>
           <View style={styles.locationCardHeaderRow}>
             <Text style={styles.locationHeading}>
-              {assignedCoords ? 'Assigned work location' : 'Current location'}
+              {geofenceSiteCoords ? 'Assigned work location' : 'Current location'}
             </Text>
-            {!locationLoading && isInZone !== null && assignedCoords && zoneBadgeLabel ? (
+            {!locationLoading && isInZone !== null && geofenceSiteCoords && zoneBadgeLabel ? (
               <View style={isInZone ? styles.inZoneBadge : styles.outZoneBadge}>
                 <Feather
                   name="briefcase"
@@ -652,6 +997,48 @@ export function DashboardScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <Modal visible={showClockOutModal} transparent animationType="fade" onRequestClose={() => setShowClockOutModal(false)}>
+        <KeyboardAvoidingView
+          style={styles.clockOutModalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Pressable style={styles.clockOutModalBackdrop} onPress={() => setShowClockOutModal(false)} />
+          <View style={styles.clockOutModalCard}>
+            <Text style={styles.clockOutModalTitle}>Clock out</Text>
+            <Text style={styles.clockOutModalSubtitle}>
+              Add an optional comment for your manager (e.g. reason for leaving early).
+            </Text>
+            <TextInput
+              style={styles.clockOutModalInput}
+              placeholder="Comment (optional)"
+              placeholderTextColor="#9CA3AF"
+              value={clockOutComment}
+              onChangeText={setClockOutComment}
+              multiline
+              maxLength={2000}
+              textAlignVertical="top"
+              autoFocus
+            />
+            <View style={styles.clockOutModalActions}>
+              <TouchableOpacity
+                style={styles.clockOutModalCancelBtn}
+                onPress={() => setShowClockOutModal(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.clockOutModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.clockOutModalConfirmBtn}
+                onPress={() => void performClockOut()}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.clockOutModalConfirmText}>Clock out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <SweetAlert
         visible={clockAlert !== null}

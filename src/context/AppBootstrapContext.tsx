@@ -5,6 +5,8 @@ import type { BootstrapCompany, BootstrapPayload, PicklistOption } from '../type
 import { setAppLocale, setAppTimezone } from '../utils/formatDateTime';
 
 type AppBootstrapContextValue = {
+  /** True after the bootstrap cache read finishes (used by the startup loader gate). */
+  cacheHydrated: boolean;
   /** True only on the first load when no cached organizations are available yet. */
   loading: boolean;
   /** True while a background refresh is in progress (does not block the login UI). */
@@ -18,6 +20,7 @@ type AppBootstrapContextValue = {
 const AppBootstrapContext = createContext<AppBootstrapContextValue | null>(null);
 
 export function AppBootstrapProvider({ children }: { children: React.ReactNode }) {
+  const [cacheHydrated, setCacheHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +79,14 @@ export function AppBootstrapProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     void (async () => {
-      const cached = await loadBootstrapCache();
+      let cached: BootstrapPayload | null = null;
+      try {
+        cached = await loadBootstrapCache();
+      } finally {
+        if (mountedRef.current) {
+          setCacheHydrated(true);
+        }
+      }
       if (!mountedRef.current) return;
 
       if (cached) {
@@ -92,6 +102,7 @@ export function AppBootstrapProvider({ children }: { children: React.ReactNode }
 
   const value = useMemo<AppBootstrapContextValue>(
     () => ({
+      cacheHydrated,
       loading,
       refreshing,
       error,
@@ -99,7 +110,7 @@ export function AppBootstrapProvider({ children }: { children: React.ReactNode }
       picklists: data?.picklists ?? {},
       refetch: () => load({ isRefetch: true, hadCache: (data?.companies.length ?? 0) > 0 }),
     }),
-    [loading, refreshing, error, data, load],
+    [cacheHydrated, loading, refreshing, error, data, load],
   );
 
   return <AppBootstrapContext.Provider value={value}>{children}</AppBootstrapContext.Provider>;

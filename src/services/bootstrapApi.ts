@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import type { BootstrapCompany, BootstrapPayload, PicklistOption } from '../types/bootstrap';
 import { setAppLocale, setAppTimezone } from '../utils/formatDateTime';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
+import { tryParseApiJson } from '../utils/parseApiJson';
 import { saveBootstrapCache } from './bootstrapCacheStorage';
 
 function networkBootstrapError(cause?: unknown): Error {
@@ -148,10 +149,8 @@ export async function fetchBootstrap(): Promise<BootstrapPayload> {
     );
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  const parsed = tryParseApiJson(text);
+  if (parsed === null) {
     throw new Error(
       __DEV__
         ? `Server returned invalid JSON from ${url}`

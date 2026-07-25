@@ -23,6 +23,8 @@ export type UserProfileSnapshot = {
   assignedDepartmentCode?: string;
   /** Shift template breaks line from tenant `shifts.breaks_summary`. */
   assignedShiftBreaksSummary?: string;
+  /** Structured shift breaks (`label`, `minutes`, `paid`) from tenant `shifts.breaks`. */
+  assignedShiftBreaks?: { label: string; minutes: number; paid: boolean }[];
   /** Shift template notes from tenant `shifts.notes`. */
   assignedShiftNotes?: string;
   /** Site / location notes from tenant `work_locations.notes`. */

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,9 +10,15 @@ import {
   Linking,
   ActivityIndicator,
   RefreshControl,
+  TextInput,
+  Platform,
 } from 'react-native';
+import DateTimePicker, {
+  DateTimePickerAndroid,
+  type DateTimePickerChangeEvent,
+} from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { dashboardStyles } from '../../styles/styles';
@@ -29,32 +35,21 @@ import {
   type ScheduleDayEntry,
   type WeeklySchedulePayload,
 } from '../../services/shiftsApi';
+import {
+  fetchTimeOffRequests,
+  submitTimeOffRequest,
+  type TimeOffRequestItem,
+} from '../../services/timeOffApi';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
+import { SweetAlert } from '../../components/SweetAlert';
 import {
-  WEEK_DAY_KEYS,
-  WEEK_DAY_SHORT,
   formatAssignedShiftDays,
   formatTimeHm,
   isPastWeek,
-  parseWeeklyAvailabilityGrid,
-  weeklyAvailabilityHasSelection,
-  type WeeklyAvailabilityGrid,
 } from '../../utils/weeklySchedule';
 
-type TabType = 'Upcoming' | 'History' | 'Pending';
-
-const MORNING_RANGE = '6:00 AM – 11:00 AM';
-const EVENING_RANGE = '5:00 PM – 10:00 PM';
-
-function formatEmploymentLabel(status: string | undefined): string {
-  if (!status || status.trim() === '') return 'Status unknown';
-  const s = status.toLowerCase();
-  if (s === 'active') return 'Active';
-  if (s === 'pending') return 'Pending approval';
-  if (s === 'declined' || s === 'rejected') return 'Not approved';
-  return status.replace(/_/g, ' ');
-}
+type TabType = 'Upcoming' | 'Time off';
 
 function departmentLine(profile: UserProfileSnapshot): string {
   const name = profile.assignedDepartment?.trim();
@@ -89,10 +84,49 @@ function openMapsAt(lat: number, lng: number): void {
   });
 }
 
-function defaultWeekForTab(tab: TabType): string {
-  const current = mondayOfWeek();
-  if (tab === 'History') return shiftWeekStart(current, -1);
-  return current;
+function toIsoDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = `${date.getMonth() + 1}`.padStart(2, '0');
+  const d = `${date.getDate()}`.padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function formatRequestDate(date: Date): string {
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function timeOffStatusMeta(status: string): { label: string; color: string; bg: string } {
+  const s = status.toLowerCase();
+  if (s === 'approved') return { label: 'APPROVED', color: '#166534', bg: '#DCFCE7' };
+  if (s === 'rejected') return { label: 'REJECTED', color: '#B91C1C', bg: '#FEE2E2' };
+  if (s === 'cancelled') return { label: 'CANCELLED', color: '#4B5563', bg: '#E5E7EB' };
+  return { label: 'PENDING', color: '#92400E', bg: '#FEF3C7' };
+}
+
+function TimeOffRequestCard({ item }: { item: TimeOffRequestItem }) {
+  const meta = timeOffStatusMeta(item.status);
+  return (
+    <View style={s.timeOffCard}>
+      <View style={s.timeOffCardTop}>
+        <Text style={s.timeOffCardDate}>{item.date_label || item.requested_date || '—'}</Text>
+        <View style={[s.timeOffBadge, { backgroundColor: meta.bg }]}>
+          <Text style={[s.timeOffBadgeText, { color: meta.color }]}>{meta.label}</Text>
+        </View>
+      </View>
+      {item.reason ? <Text style={s.timeOffCardReason}>{item.reason}</Text> : null}
+      {item.decision_note ? (
+        <View style={s.timeOffNoteBox}>
+          <Text style={s.timeOffNoteLabel}>Manager note</Text>
+          <Text style={s.timeOffNoteText}>{item.decision_note}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 function ShiftInfoRow({
@@ -128,38 +162,86 @@ function NotesSection({ title, body }: { title: string; body: string | undefined
   );
 }
 
-function AvailabilityGrid({ grid }: { grid: WeeklyAvailabilityGrid }) {
-  return (
-    <View style={s.availabilityCard}>
-      <View style={s.availabilityHeaderRow}>
-        {WEEK_DAY_KEYS.map((day) => (
-          <View key={day} style={s.availabilityDayCol}>
-            <Text style={s.availabilityDayLetter}>{WEEK_DAY_SHORT[day]}</Text>
-          </View>
-        ))}
-      </View>
+function formatBreakMinutes(minutes: number): string {
+  if (minutes >= 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  return `${minutes}m`;
+}
 
-      {(['morning', 'evening'] as const).map((slot) => (
-        <View key={slot} style={s.availabilitySlotRow}>
-          <View style={s.availabilitySlotLabel}>
-            <Feather name={slot === 'morning' ? 'sun' : 'moon'} size={14} color={colors.primary} />
-            <Text style={s.availabilitySlotText}>{slot === 'morning' ? 'Morning' : 'Evening'}</Text>
+function BreaksAndNotesCard({ profile }: { profile: UserProfileSnapshot }) {
+  const breaks = profile.assignedShiftBreaks ?? [];
+  const paidBreaks = breaks.filter((b) => b.paid);
+  const unpaidBreaks = breaks.filter((b) => !b.paid);
+  const summary = profile.assignedShiftBreaksSummary?.trim();
+  const hasStructuredBreaks = breaks.length > 0;
+  const hasNotes =
+    !!profile.assignmentNotes?.trim() ||
+    !!profile.assignedShiftNotes?.trim() ||
+    !!profile.assignedWorkLocationNotes?.trim();
+
+  if (!hasStructuredBreaks && !summary && !hasNotes) return null;
+
+  const paidMinutes = paidBreaks.reduce((sum, b) => sum + b.minutes, 0);
+  const unpaidMinutes = unpaidBreaks.reduce((sum, b) => sum + b.minutes, 0);
+
+  return (
+    <View style={s.shiftCard}>
+      <Text style={s.shiftCardTitle}>Breaks & notes</Text>
+
+      {hasStructuredBreaks ? (
+        <View style={s.breaksBlock}>
+          <Text style={s.breaksFromShiftHint}>From your assigned shift</Text>
+          <View style={s.breakCountRow}>
+            <View style={[s.breakCountPill, s.breakCountPillPaid]}>
+              <Text style={[s.breakCountPillText, s.breakCountPillTextPaid]}>
+                {paidBreaks.length} paid
+                {paidMinutes > 0 ? ` · ${formatBreakMinutes(paidMinutes)}` : ''}
+              </Text>
+            </View>
+            <View style={[s.breakCountPill, s.breakCountPillUnpaid]}>
+              <Text style={[s.breakCountPillText, s.breakCountPillTextUnpaid]}>
+                {unpaidBreaks.length} unpaid
+                {unpaidMinutes > 0 ? ` · ${formatBreakMinutes(unpaidMinutes)}` : ''}
+              </Text>
+            </View>
+            <View style={[s.breakCountPill, s.breakCountPillTotal]}>
+              <Text style={[s.breakCountPillText, s.breakCountPillTextTotal]}>
+                {breaks.length} total
+              </Text>
+            </View>
           </View>
-          <View style={s.availabilityCellsRow}>
-            {WEEK_DAY_KEYS.map((day) => {
-              const active = grid[day][slot];
-              return (
-                <View key={`${day}-${slot}`} style={s.availabilityDayCol}>
-                  <View style={[s.availabilityCell, active && s.availabilityCellActive]}>
-                    {active ? <Feather name="check" size={12} color={colors.primary} /> : null}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-          <Text style={s.availabilityRangeHint}>{slot === 'morning' ? MORNING_RANGE : EVENING_RANGE}</Text>
+
+          {breaks.map((item, index) => (
+            <View
+              key={`${item.label}-${item.minutes}-${index}`}
+              style={[s.breakItemRow, item.paid ? s.breakItemPaid : s.breakItemUnpaid]}
+            >
+              <View style={s.breakItemText}>
+                <Text style={s.breakItemLabel}>{item.label}</Text>
+                <Text style={s.breakItemMeta}>
+                  {formatBreakMinutes(item.minutes)} · {item.paid ? 'Paid' : 'Unpaid'}
+                </Text>
+              </View>
+              <View style={[s.breakTypeBadge, item.paid ? s.breakTypeBadgePaid : s.breakTypeBadgeUnpaid]}>
+                <Text style={[s.breakTypeBadgeText, item.paid ? s.breakTypeBadgeTextPaid : s.breakTypeBadgeTextUnpaid]}>
+                  {item.paid ? 'PAID' : 'UNPAID'}
+                </Text>
+              </View>
+            </View>
+          ))}
         </View>
-      ))}
+      ) : summary ? (
+        <NotesSection title="Shift breaks" body={summary} />
+      ) : (
+        <Text style={s.breaksEmptyHint}>No breaks configured on this shift.</Text>
+      )}
+
+      <NotesSection title="From your employer" body={profile.assignmentNotes} />
+      <NotesSection title="Shift notes" body={profile.assignedShiftNotes} />
+      <NotesSection title="Site notes" body={profile.assignedWorkLocationNotes} />
     </View>
   );
 }
@@ -197,11 +279,24 @@ function ScheduleEntryCard({ entry }: { entry: ScheduleDayEntry }) {
   );
 }
 
-function ScheduleDayRow({ day }: { day: ScheduleDay }) {
-  const hasEntries = day.entries.length > 0;
+function ScheduleDayRow({
+  day,
+  onTodayLayout,
+}: {
+  day: ScheduleDay;
+  onTodayLayout?: (y: number) => void;
+}) {
+  const entries = day.entries ?? [];
+  const hasEntries = entries.length > 0;
 
   return (
-    <View style={[s.scheduleDayRow, day.is_today && s.scheduleDayRowToday]}>
+    <View
+      collapsable={false}
+      style={[s.scheduleDayRow, day.is_today && s.scheduleDayRowToday]}
+      onLayout={(e) => {
+        if (day.is_today) onTodayLayout?.(e.nativeEvent.layout.y);
+      }}
+    >
       <View style={s.scheduleDayLeft}>
         <Text style={[s.scheduleDayWeekday, day.is_today && s.scheduleDayWeekdayToday]}>
           {day.weekday_label}
@@ -212,7 +307,7 @@ function ScheduleDayRow({ day }: { day: ScheduleDay }) {
         {!hasEntries ? (
           <Text style={s.scheduleDayEmpty}>No shift scheduled</Text>
         ) : (
-          day.entries.map((entry, index) => (
+          entries.map((entry, index) => (
             <ScheduleEntryCard key={`${day.date}-${entry.id ?? index}`} entry={entry} />
           ))
         )}
@@ -262,18 +357,35 @@ function WeekNavigator({
   );
 }
 
-export function ShiftsScreen() {
+export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) {
   const navigation = useNavigation<any>();
   const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
   const headerStyles = dashboardStyles;
+  const scrollRef = useRef<ScrollView>(null);
+  const todayScrollYRef = useRef<number | null>(null);
+  const scrolledToTodayKeyRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('Upcoming');
   const [profile, setProfile] = useState<UserProfileSnapshot | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [weekStart, setWeekStart] = useState(() => mondayOfWeek());
   const [schedule, setSchedule] = useState<WeeklySchedulePayload | null>(null);
-  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [screenReady, setScreenReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [timeOffRequests, setTimeOffRequests] = useState<TimeOffRequestItem[]>([]);
+  const [timeOffLoading, setTimeOffLoading] = useState(false);
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [requestDate, setRequestDate] = useState<Date>(() => new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [requestReason, setRequestReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    title: string;
+    message: string;
+    variant: 'success' | 'error' | 'info';
+  } | null>(null);
 
   const loadSchedule = useCallback(async (week: string) => {
     setScheduleLoading(true);
@@ -289,9 +401,32 @@ export function ShiftsScreen() {
       setSchedule(result.schedule);
     } else {
       setSchedule(null);
-      setScheduleError(result.message);
+      // Keep Shifts quiet — connection problems are surfaced on the Dashboard.
+      const isNetwork =
+        /could not reach|timed out|network request failed|failed to fetch|connection/i.test(
+          result.message,
+        );
+      setScheduleError(
+        isNetwork
+          ? 'Unable to load your schedule. Check your connection and try again from the Dashboard.'
+          : result.message,
+      );
     }
     setScheduleLoading(false);
+  }, []);
+
+  const loadTimeOffRequests = useCallback(async () => {
+    const signedIn = await getSessionAuthenticated();
+    if (!signedIn) {
+      setTimeOffRequests([]);
+      return;
+    }
+    setTimeOffLoading(true);
+    const result = await fetchTimeOffRequests();
+    if (result.ok) {
+      setTimeOffRequests(result.requests);
+    }
+    setTimeOffLoading(false);
   }, []);
 
   const refreshAll = useCallback(
@@ -303,26 +438,148 @@ export function ShiftsScreen() {
       const api = await refreshAndCacheAccountProfileFromApi();
       if (api.ok) setProfile(api.profile);
       await loadSchedule(week);
+      await loadTimeOffRequests();
     },
-    [loadSchedule],
+    [loadSchedule, loadTimeOffRequests],
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      void (async () => {
+  const submitRequest = useCallback(async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    const result = await submitTimeOffRequest({
+      date: toIsoDate(requestDate),
+      reason: requestReason,
+    });
+    setSubmitting(false);
+    if (result.ok) {
+      setShowRequestForm(false);
+      setRequestReason('');
+      setRequestDate(new Date());
+      setFeedback({ title: 'Request sent', message: result.message, variant: 'success' });
+      await loadTimeOffRequests();
+    } else {
+      setFeedback({ title: 'Could not submit', message: result.message, variant: 'error' });
+    }
+  }, [submitting, requestDate, requestReason, loadTimeOffRequests]);
+
+  const dismissDatePicker = useCallback(() => setShowDatePicker(false), []);
+
+  const onDateSelected = useCallback((_event: DateTimePickerChangeEvent, picked?: Date) => {
+    setShowDatePicker(false);
+    if (picked instanceof Date && !Number.isNaN(picked.getTime())) {
+      setRequestDate(picked);
+    }
+  }, []);
+
+  const openDatePicker = useCallback(() => {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: requestDate,
+        mode: 'date',
+        display: 'calendar',
+        minimumDate: new Date(),
+        onValueChange: (_event, picked) => {
+          if (picked instanceof Date && !Number.isNaN(picked.getTime())) {
+            setRequestDate(picked);
+          }
+        },
+        onDismiss: () => {},
+      });
+      return;
+    }
+    setShowDatePicker(true);
+  }, [requestDate]);
+
+  useEffect(() => {
+    if (!isTabActive) return;
+    let cancelled = false;
+    void (async () => {
+      // Only show the full-screen gate on the first load; later revisits refresh quietly.
+      if (!screenReady) {
+        setProfileLoading(true);
+      }
+      try {
         const local = await loadAccountProfile();
+        if (cancelled) return;
         setProfile(local);
         const signedIn = await getSessionAuthenticated();
-        if (!signedIn) return;
+        if (!signedIn || cancelled) return;
         const api = await refreshAndCacheAccountProfileFromApi();
+        if (cancelled) return;
         if (api.ok) setProfile(api.profile);
-      })();
-    }, []),
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // screenReady intentionally omitted — read as a one-shot gate for the first visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTabActive]);
+
+  useEffect(() => {
+    if (!isTabActive || activeTab !== 'Upcoming') return;
+    // Opening Shifts on Upcoming always lands on the current local week.
+    setWeekStart(mondayOfWeek());
+  }, [isTabActive, activeTab]);
+
+  useEffect(() => {
+    if (!isTabActive) return;
+    void loadSchedule(weekStart);
+  }, [weekStart, loadSchedule, isTabActive]);
+
+  useEffect(() => {
+    if (!profileLoading && !scheduleLoading) {
+      setScreenReady(true);
+    }
+  }, [profileLoading, scheduleLoading]);
+
+  const isCurrentWeek = weekStart === mondayOfWeek();
+  const hasTodayInSchedule = !!schedule?.days?.some((d) => d.is_today);
+  const todayFocusKey =
+    isTabActive && activeTab === 'Upcoming' && isCurrentWeek && hasTodayInSchedule
+      ? `${weekStart}:${schedule?.week_start ?? ''}`
+      : null;
+
+  const scrollToToday = useCallback(
+    (animated = true) => {
+      if (!todayFocusKey) return;
+      if (scrolledToTodayKeyRef.current === todayFocusKey) return;
+      const y = todayScrollYRef.current;
+      if (y == null) return;
+      scrolledToTodayKeyRef.current = todayFocusKey;
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated });
+    },
+    [todayFocusKey],
+  );
+
+  const onTodayLayout = useCallback(
+    (y: number) => {
+      todayScrollYRef.current = y;
+      if (!screenReady || !todayFocusKey) return;
+      requestAnimationFrame(() => scrollToToday(true));
+    },
+    [screenReady, todayFocusKey, scrollToToday],
   );
 
   useEffect(() => {
-    void loadSchedule(weekStart);
-  }, [weekStart, loadSchedule]);
+    if (!screenReady || !todayFocusKey) return;
+    const t = setTimeout(() => scrollToToday(true), 120);
+    return () => clearTimeout(t);
+  }, [screenReady, todayFocusKey, scrollToToday]);
+
+  // Clear the one-shot focus lock when leaving Upcoming / the current week.
+  useEffect(() => {
+    if (!isTabActive || activeTab !== 'Upcoming' || !isCurrentWeek) {
+      scrolledToTodayKeyRef.current = null;
+    }
+  }, [activeTab, isTabActive, isCurrentWeek]);
+
+  useEffect(() => {
+    if (!isTabActive || activeTab !== 'Time off') return;
+    void loadTimeOffRequests();
+  }, [isTabActive, activeTab, loadTimeOffRequests]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -330,32 +587,31 @@ export function ShiftsScreen() {
     setRefreshing(false);
   }, [refreshAll, weekStart]);
 
-  const onTabChange = useCallback(
-    (tab: TabType) => {
-      setActiveTab(tab);
-      setWeekStart(defaultWeekForTab(tab));
-    },
-    [],
-  );
+  const onTabChange = useCallback((tab: TabType) => {
+    setActiveTab(tab);
+    // Always land Upcoming on the current week (today → Sunday).
+    if (tab === 'Upcoming') {
+      setWeekStart(mondayOfWeek());
+    }
+  }, []);
 
   const goPrevWeek = useCallback(() => {
     setWeekStart((prev) => shiftWeekStart(prev, -1));
   }, []);
 
   const goNextWeek = useCallback(() => {
-    setWeekStart((prev) => shiftWeekStart(prev, 1));
+    setWeekStart((prev) => {
+      const current = mondayOfWeek();
+      const next = shiftWeekStart(prev, 1);
+      // Allow browsing past weeks and a limited window of future weeks.
+      const maxFuture = shiftWeekStart(current, 8);
+      return next <= maxFuture ? next : prev;
+    });
   }, []);
 
   const employmentStatus = profile?.employmentStatus?.toLowerCase() ?? '';
   const isPendingApproval = employmentStatus === 'pending';
-  const isActiveEmployee = employmentStatus === 'active';
   const workCoords = parseWorkCoords(profile);
-  const availabilityGrid = useMemo(
-    () => parseWeeklyAvailabilityGrid(profile?.weeklyAvailabilityJson),
-    [profile?.weeklyAvailabilityJson],
-  );
-  const hasAvailability =
-    weeklyAvailabilityHasSelection(availabilityGrid) || !!profile?.weeklyAvailabilitySummary?.trim();
 
   const rosterTitle = !profile
     ? 'Your assignment'
@@ -364,20 +620,13 @@ export function ShiftsScreen() {
       profile.companyName?.trim() ||
       'Your assignment';
 
-  const rosterSubtitle = !profile
-    ? ''
-    : [
-        profile.companyName?.trim(),
-        departmentLine(profile) !== 'Not assigned' ? departmentLine(profile) : null,
-      ]
-        .filter(Boolean)
-        .join(' · ');
-
-  const hasExtraNotes =
-    !!profile?.assignedShiftBreaksSummary?.trim() ||
-    !!profile?.assignmentNotes?.trim() ||
-    !!profile?.assignedShiftNotes?.trim() ||
-    !!profile?.assignedWorkLocationNotes?.trim();
+  const workSiteLabel = profile?.assignedWorkLocationName?.trim()
+    ? `${profile.assignedWorkLocationName}${
+        profile?.assignedWorkLocationAddress?.trim()
+          ? ` — ${profile.assignedWorkLocationAddress.trim()}`
+          : ''
+      }`
+    : profile?.assignedWorkLocationAddress?.trim() ?? '';
 
   const hasAssignment =
     !!profile?.assignedShiftName?.trim() ||
@@ -386,13 +635,16 @@ export function ShiftsScreen() {
     departmentLine(profile ?? {}) !== 'Not assigned';
 
   const currentWeek = mondayOfWeek();
-  const canGoNext =
-    activeTab === 'History' ? weekStart < shiftWeekStart(currentWeek, -1) : weekStart < shiftWeekStart(currentWeek, 8);
+  const canGoNext = weekStart < shiftWeekStart(currentWeek, 8);
+
+  const visibleScheduleDays = schedule?.days ?? [];
 
   const scheduleSection = (
     <>
       <View style={s.scheduleHeader}>
-        <Text style={s.sectionLabel}>{activeTab === 'History' ? 'PAST SCHEDULE' : 'WEEKLY SCHEDULE'}</Text>
+        <Text style={s.sectionLabel}>
+          {isPastWeek(weekStart) ? 'PAST SCHEDULE' : 'WEEKLY SCHEDULE'}
+        </Text>
       </View>
 
       <WeekNavigator
@@ -420,18 +672,29 @@ export function ShiftsScreen() {
         </View>
       ) : null}
 
-      {schedule?.days.map((day) => (
-        <ScheduleDayRow key={day.date} day={day} />
+      {visibleScheduleDays.map((day) => (
+        <ScheduleDayRow
+          key={day.date || day.day_key}
+          day={day}
+          onTodayLayout={day.is_today ? onTodayLayout : undefined}
+        />
       ))}
 
-      {schedule && schedule.days.every((d) => d.entries.length === 0) ? (
+      {schedule && visibleScheduleDays.every((d) => (d.entries?.length ?? 0) === 0) ? (
         <View style={s.emptyScheduleHint}>
           <Feather name="calendar" size={20} color="#9CA3AF" />
           <Text style={s.emptyScheduleHintText}>
-            No shifts published for this week yet. Your default assignment is shown below — your manager may still be
-            building the roster.
+            {isPastWeek(weekStart)
+              ? 'No shifts were published for this week.'
+              : 'No shifts published for this week yet. Your default assignment is shown below — your manager may still be building the roster.'}
           </Text>
         </View>
+      ) : null}
+
+      {isPastWeek(weekStart) ? (
+        <Text style={s.historyFootnote}>
+          Browsing a past week. Use the right arrow to return to this week.
+        </Text>
       ) : null}
     </>
   );
@@ -443,24 +706,12 @@ export function ShiftsScreen() {
       </View>
 
       <View style={s.shiftCard}>
-        <View style={s.shiftCardTopRow}>
-          <View style={[s.statusPill, isActiveEmployee ? s.statusPillActive : s.statusPillNeutral]}>
-            <Text style={[s.statusPillText, isActiveEmployee ? s.statusPillTextActive : s.statusPillTextNeutral]}>
-              {formatEmploymentLabel(profile?.employmentStatus).toUpperCase()}
-            </Text>
-          </View>
-          <View style={s.shiftCardBadgeConfirmed}>
-            <Text style={s.shiftCardBadgeTextConfirmed}>FROM WORKPLACE</Text>
-          </View>
-        </View>
-
         <Text style={s.shiftCardTitle}>{rosterTitle}</Text>
-        {rosterSubtitle ? <Text style={s.shiftCardSubtitle}>{rosterSubtitle}</Text> : null}
 
         <View style={s.shiftHoursRow}>
           <Feather name="clock" size={18} color={colors.primary} />
           <View style={s.shiftHoursText}>
-            <Text style={s.shiftHoursLabel}>Default shift hours</Text>
+            <Text style={s.shiftHoursLabel}>Shift hours</Text>
             <Text style={s.shiftHoursValue}>{shiftTimeWindow(profile ?? {})}</Text>
           </View>
         </View>
@@ -470,18 +721,8 @@ export function ShiftsScreen() {
           label="Repeats on"
           value={formatAssignedShiftDays(profile?.assignedShiftDays)}
         />
-        <ShiftInfoRow icon="calendar" label="Effective from" value={profile?.assignedShiftDate ?? ''} />
         <ShiftInfoRow icon="briefcase" label="Department" value={departmentLine(profile ?? {})} />
-        <ShiftInfoRow icon="user" label="Role" value={profile?.jobTitle?.trim() ?? ''} />
-        <ShiftInfoRow
-          icon="map-pin"
-          label="Work site"
-          value={
-            profile?.assignedWorkLocationName?.trim()
-              ? `${profile.assignedWorkLocationName}${profile?.assignedWorkLocationAddress ? ` — ${profile.assignedWorkLocationAddress}` : ''}`
-              : profile?.assignedWorkLocationAddress?.trim() ?? ''
-          }
-        />
+        <ShiftInfoRow icon="map-pin" label="Work site" value={workSiteLabel} />
 
         {workCoords ? (
           <TouchableOpacity
@@ -492,26 +733,12 @@ export function ShiftsScreen() {
             accessibilityLabel="Open assigned work location in maps"
           >
             <Feather name="navigation" size={18} color={colors.white} />
-            <Text style={s.mapsBtnText}>
-              Open site on map ({workCoords.lat.toFixed(5)}, {workCoords.lng.toFixed(5)})
-            </Text>
+            <Text style={s.mapsBtnText}>Open site on map</Text>
           </TouchableOpacity>
-        ) : null}
-
-        {profile?.hoursPerWeek?.trim() ? (
-          <ShiftInfoRow icon="pie-chart" label="Contracted hours / week" value={profile.hoursPerWeek.trim()} />
         ) : null}
       </View>
 
-      {hasExtraNotes ? (
-        <View style={s.shiftCard}>
-          <Text style={s.shiftCardTitle}>Breaks & notes</Text>
-          <NotesSection title="Breaks" body={profile?.assignedShiftBreaksSummary} />
-          <NotesSection title="From your employer" body={profile?.assignmentNotes} />
-          <NotesSection title="Shift notes" body={profile?.assignedShiftNotes} />
-          <NotesSection title="Site notes" body={profile?.assignedWorkLocationNotes} />
-        </View>
-      ) : null}
+      {profile ? <BreaksAndNotesCard profile={profile} /> : null}
     </>
   ) : (
     <View style={s.emptyCard}>
@@ -522,25 +749,6 @@ export function ShiftsScreen() {
       </Text>
     </View>
   );
-
-  const availabilitySection = hasAvailability ? (
-    <>
-      <View style={s.scheduleHeader}>
-        <Text style={s.sectionLabel}>YOUR AVAILABILITY</Text>
-      </View>
-      <View style={s.shiftCard}>
-        <Text style={s.availabilityIntro}>
-          Times you said you can work when you registered. Your published roster above may differ.
-        </Text>
-        {weeklyAvailabilityHasSelection(availabilityGrid) ? (
-          <AvailabilityGrid grid={availabilityGrid} />
-        ) : null}
-        {profile?.weeklyAvailabilitySummary?.trim() ? (
-          <Text style={s.availabilitySummary}>{profile.weeklyAvailabilitySummary.trim()}</Text>
-        ) : null}
-      </View>
-    </>
-  ) : null;
 
   const upcomingBody = (
     <>
@@ -558,52 +766,138 @@ export function ShiftsScreen() {
         <>
           {scheduleSection}
           {assignmentSection}
-          {availabilitySection}
         </>
       ) : null}
     </>
   );
 
-  const historyBody = (
-    <>
-      {isPendingApproval ? (
-        <View style={s.emptyCard}>
-          <Feather name="inbox" size={36} color="#D97706" />
-          <Text style={s.emptyTitle}>No history yet</Text>
-          <Text style={s.emptyHint}>Shift history will appear after your account is approved.</Text>
-        </View>
-      ) : (
-        <>
-          {scheduleSection}
-          {isPastWeek(weekStart) ? (
-            <Text style={s.historyFootnote}>
-              Showing published roster for a past week. Use the arrows to browse earlier weeks.
-            </Text>
-          ) : null}
-        </>
-      )}
-    </>
+  const initialLoader = (
+    <View style={s.initialLoader} accessibilityLabel="Loading shifts">
+      <ActivityIndicator size="large" color={colors.primary} />
+      <Text style={s.initialLoaderText}>Loading your shifts…</Text>
+    </View>
   );
 
-  const pendingTabBody =
-    isPendingApproval ? (
-      <View style={s.emptyCard}>
-        <Feather name="inbox" size={36} color="#D97706" />
-        <Text style={s.emptyTitle}>Awaiting organization approval</Text>
-        <Text style={s.emptyHint}>
-          There are no pending shift offers until your account is active. Check with your administrator if you need
-          help.
-        </Text>
+  const timeOffBody = isPendingApproval ? (
+    <View style={s.emptyCard}>
+      <Feather name="inbox" size={36} color="#D97706" />
+      <Text style={s.emptyTitle}>Awaiting organization approval</Text>
+      <Text style={s.emptyHint}>
+        You can request time off once your account is active. Check with your administrator if you need help.
+      </Text>
+    </View>
+  ) : (
+    <>
+      <View style={s.scheduleHeader}>
+        <Text style={s.sectionLabel}>REQUEST TIME OFF</Text>
       </View>
-    ) : (
-      <View style={s.emptyCard}>
-        <Feather name="check-circle" size={36} color="#059669" />
-        <Text style={s.emptyTitle}>Nothing pending</Text>
-        <Text style={s.emptyHint}>
-          You have no outstanding shift requests. Your current roster is under &quot;Upcoming&quot;.
-        </Text>
+
+      <View style={s.shiftCard}>
+        {!showRequestForm ? (
+          <>
+            <Text style={s.timeOffIntro}>
+              Need a day off? Send a request to your manager. You will see the outcome here once it is reviewed.
+            </Text>
+            <TouchableOpacity
+              style={s.requestBtn}
+              onPress={() => setShowRequestForm(true)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Request time off"
+            >
+              <Feather name="plus-circle" size={18} color={colors.white} />
+              <Text style={s.requestBtnText}>Request time off</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={s.formLabel}>DATE</Text>
+            <TouchableOpacity
+              style={s.dateField}
+              onPress={openDatePicker}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Pick a date"
+            >
+              <Feather name="calendar" size={18} color={colors.primary} />
+              <Text style={s.dateFieldText}>{formatRequestDate(requestDate)}</Text>
+            </TouchableOpacity>
+
+            {Platform.OS === 'ios' && showDatePicker ? (
+              <DateTimePicker
+                value={requestDate}
+                mode="date"
+                display="inline"
+                minimumDate={new Date()}
+                onValueChange={onDateSelected}
+                onDismiss={dismissDatePicker}
+              />
+            ) : null}
+
+            <Text style={s.formLabel}>REASON (OPTIONAL)</Text>
+            <TextInput
+              style={s.reasonInput}
+              value={requestReason}
+              onChangeText={setRequestReason}
+              placeholder="e.g. Family commitment, medical appointment…"
+              placeholderTextColor="#9CA3AF"
+              multiline
+              maxLength={500}
+            />
+
+            <View style={s.formActions}>
+              <TouchableOpacity
+                style={s.formCancelBtn}
+                onPress={() => {
+                  setShowRequestForm(false);
+                  setRequestReason('');
+                }}
+                activeOpacity={0.85}
+                disabled={submitting}
+              >
+                <Text style={s.formCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.formSubmitBtn, submitting && s.formSubmitBtnDisabled]}
+                onPress={() => void submitRequest()}
+                activeOpacity={0.88}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={s.formSubmitText}>Submit request</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
-    );
+
+      <View style={s.scheduleHeader}>
+        <Text style={s.sectionLabel}>YOUR REQUESTS</Text>
+      </View>
+
+      {timeOffLoading && timeOffRequests.length === 0 ? (
+        <View style={s.loadingCard}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={s.loadingText}>Loading your requests…</Text>
+        </View>
+      ) : null}
+
+      {!timeOffLoading && timeOffRequests.length === 0 ? (
+        <View style={s.emptyCard}>
+          <Feather name="calendar" size={32} color="#9CA3AF" />
+          <Text style={s.emptyTitle}>No requests yet</Text>
+          <Text style={s.emptyHint}>Your time-off requests and their status will appear here.</Text>
+        </View>
+      ) : null}
+
+      {timeOffRequests.map((item) => (
+        <TimeOffRequestCard key={item.id} item={item} />
+      ))}
+    </>
+  );
 
   return (
     <View style={[s.container, { paddingTop: insets.top, paddingBottom: floatingTabBarClearance(insets.bottom) }]}>
@@ -631,13 +925,13 @@ export function ShiftsScreen() {
           onPress={openLogoutSweetAlert}
           accessibilityLabel="Log out"
         >
-          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+          <Feather name="log-out" size={24} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
       <View style={s.bodyPad}>
         <View style={s.segmentedWrap}>
-          {(['Upcoming', 'History', 'Pending'] as TabType[]).map((tab) => (
+          {(['Upcoming', 'Time off'] as TabType[]).map((tab) => (
             <Pressable
               key={tab}
               style={[s.segmentedTab, activeTab === tab && s.segmentedTabActive]}
@@ -649,16 +943,32 @@ export function ShiftsScreen() {
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={s.scroll}
-          contentContainerStyle={s.scrollContent}
+          contentContainerStyle={[s.scrollContent, !screenReady && activeTab === 'Upcoming' ? s.scrollContentCentered : null]}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />}
+          refreshControl={
+            screenReady ? (
+              <RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />
+            ) : undefined
+          }
         >
-          {activeTab === 'Upcoming' ? upcomingBody : null}
-          {activeTab === 'History' ? historyBody : null}
-          {activeTab === 'Pending' ? pendingTabBody : null}
+          {activeTab === 'Upcoming' ? (screenReady ? upcomingBody : initialLoader) : null}
+          {activeTab === 'Time off' ? timeOffBody : null}
         </ScrollView>
       </View>
+
+      <SweetAlert
+        visible={feedback !== null}
+        title={feedback?.title ?? ''}
+        message={feedback?.message ?? ''}
+        confirmText="OK"
+        cancelText="Close"
+        hideCancel
+        variant={feedback?.variant ?? 'info'}
+        onClose={() => setFeedback(null)}
+        onConfirm={() => setFeedback(null)}
+      />
     </View>
   );
 }
@@ -705,6 +1015,21 @@ const s = StyleSheet.create({
   },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 24 },
+  scrollContentCentered: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  initialLoader: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    gap: 14,
+  },
+  initialLoaderText: {
+    fontFamily: fontFamily.medium,
+    fontSize: 15,
+    color: '#6B7280',
+  },
   sectionLabel: {
     fontFamily: fontFamily.bold,
     fontSize: 11,
@@ -1016,7 +1341,7 @@ const s = StyleSheet.create({
     fontFamily: fontFamily.bold,
     fontSize: 17,
     color: colors.text.primary,
-    marginBottom: 4,
+    marginBottom: 12,
   },
   shiftCardSubtitle: {
     fontFamily: fontFamily.regular,
@@ -1115,75 +1440,107 @@ const s = StyleSheet.create({
     color: colors.text.primary,
     lineHeight: 21,
   },
-  availabilityIntro: {
-    fontFamily: fontFamily.regular,
-    fontSize: 13,
-    color: colors.text.secondary,
-    lineHeight: 19,
-    marginBottom: spacing.md,
+  breaksBlock: {
+    marginTop: spacing.sm,
+    gap: 8,
   },
-  availabilitySummary: {
-    fontFamily: fontFamily.regular,
-    fontSize: 13,
-    color: colors.text.primary,
-    lineHeight: 20,
-    marginTop: spacing.md,
+  breaksFromShiftHint: {
+    fontFamily: fontFamily.medium,
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 2,
   },
-  availabilityCard: {
+  breaksEmptyHint: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: '#9CA3AF',
     marginTop: spacing.sm,
   },
-  availabilityHeaderRow: {
+  breakCountRow: {
     flexDirection: 'row',
-    marginBottom: spacing.sm,
-    paddingLeft: 72,
-  },
-  availabilityDayCol: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  availabilityDayLetter: {
-    fontFamily: fontFamily.semiBold,
-    fontSize: 10,
-    color: colors.primary,
-  },
-  availabilitySlotRow: {
-    marginBottom: spacing.md,
-  },
-  availabilitySlotLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: spacing.sm,
-  },
-  availabilitySlotText: {
-    fontFamily: fontFamily.semiBold,
-    fontSize: 13,
-    color: colors.text.primary,
-  },
-  availabilityCellsRow: {
-    flexDirection: 'row',
-    paddingLeft: 72,
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 4,
   },
-  availabilityCell: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FAFAFA',
+  breakCountPill: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  breakCountPillPaid: {
+    backgroundColor: '#DCFCE7',
+  },
+  breakCountPillUnpaid: {
+    backgroundColor: '#F3F4F6',
+  },
+  breakCountPillTotal: {
+    backgroundColor: '#EFF6FF',
+  },
+  breakCountPillText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 12,
+  },
+  breakCountPillTextPaid: {
+    color: '#166534',
+  },
+  breakCountPillTextUnpaid: {
+    color: '#4B5563',
+  },
+  breakCountPillTextTotal: {
+    color: '#1D4ED8',
+  },
+  breakItemRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 10,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
   },
-  availabilityCellActive: {
-    backgroundColor: 'rgba(0,86,164,0.1)',
-    borderColor: colors.primary,
+  breakItemPaid: {
+    backgroundColor: '#F0FDF4',
+    borderColor: 'rgba(22,101,52,0.15)',
   },
-  availabilityRangeHint: {
-    fontFamily: fontFamily.regular,
-    fontSize: 11,
-    color: '#9CA3AF',
-    marginLeft: 72,
+  breakItemUnpaid: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#E5E7EB',
+  },
+  breakItemText: {
+    flex: 1,
+  },
+  breakItemLabel: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    color: colors.text.primary,
+  },
+  breakItemMeta: {
+    fontFamily: fontFamily.medium,
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  breakTypeBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  breakTypeBadgePaid: {
+    backgroundColor: '#DCFCE7',
+  },
+  breakTypeBadgeUnpaid: {
+    backgroundColor: '#E5E7EB',
+  },
+  breakTypeBadgeText: {
+    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    letterSpacing: 0.4,
+  },
+  breakTypeBadgeTextPaid: {
+    color: '#166534',
+  },
+  breakTypeBadgeTextUnpaid: {
+    color: '#4B5563',
   },
   emptyCard: {
     backgroundColor: colors.white,
@@ -1208,5 +1565,159 @@ const s = StyleSheet.create({
     marginTop: spacing.sm,
     textAlign: 'center',
     lineHeight: 21,
+  },
+  timeOffIntro: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.secondary,
+    lineHeight: 20,
+    marginBottom: spacing.lg,
+  },
+  requestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  requestBtnText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 15,
+    color: colors.white,
+  },
+  formLabel: {
+    fontFamily: fontFamily.bold,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: '#9CA3AF',
+    marginBottom: 8,
+    marginTop: 4,
+    textTransform: 'uppercase',
+  },
+  dateField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#F0F7FF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(0,86,164,0.12)',
+  },
+  dateFieldText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 15,
+    color: colors.text.primary,
+  },
+  reasonInput: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    padding: 14,
+    minHeight: 88,
+    textAlignVertical: 'top',
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.primary,
+    marginBottom: spacing.lg,
+  },
+  formActions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  formCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formCancelText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 15,
+    color: '#4B5563',
+  },
+  formSubmitBtn: {
+    flex: 1.4,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formSubmitBtnDisabled: {
+    opacity: 0.6,
+  },
+  formSubmitText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 15,
+    color: colors.white,
+  },
+  timeOffCard: {
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.05)',
+  },
+  timeOffCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  timeOffCardDate: {
+    flex: 1,
+    fontFamily: fontFamily.bold,
+    fontSize: 15,
+    color: colors.text.primary,
+  },
+  timeOffBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  timeOffBadgeText: {
+    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    letterSpacing: 0.6,
+  },
+  timeOffCardReason: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.secondary,
+    lineHeight: 20,
+    marginTop: 8,
+  },
+  timeOffNoteBox: {
+    marginTop: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  timeOffNoteLabel: {
+    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    color: '#6B7280',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  timeOffNoteText: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.primary,
+    lineHeight: 20,
   },
 });

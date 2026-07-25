@@ -11,8 +11,8 @@ import {
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import type { BootstrapCompany } from '../types/bootstrap';
-import { spacing } from '../theme/theme';
-import { createAccountScreenStyles, loginScreenStyles } from '../styles/styles';
+import { colors, spacing, fontFamily } from '../theme/theme';
+import { loginScreenStyles } from '../styles/loginScreenStyles';
 
 type CompanyPickerVariant = 'login' | 'createAccount';
 
@@ -26,6 +26,10 @@ export interface CompanyPickerProps {
   onChange: (slug: string) => void;
 }
 
+function getCreateAccountStyles() {
+  return require('../styles/styles').createAccountScreenStyles;
+}
+
 export function CompanyPicker({
   variant,
   companies,
@@ -35,7 +39,7 @@ export function CompanyPicker({
 }: CompanyPickerProps) {
   const [open, setOpen] = useState(false);
 
-  const label = variant === 'login' ? 'COMPANY / ORGANIZATION' : 'Company or organization';
+  const label = variant === 'login' ? 'COMPANY / ORGANIZATION' : 'Company or organization *';
 
   const selectedName = useMemo(() => {
     if (!value) return null;
@@ -43,7 +47,8 @@ export function CompanyPicker({
   }, [value, companies]);
 
   const loginStyles = loginScreenStyles;
-  const caStyles = createAccountScreenStyles;
+  const caStyles = variant === 'createAccount' ? getCreateAccountStyles() : null;
+  const modalStyles = caStyles ?? pickerModalStyles;
 
   return (
     <>
@@ -51,15 +56,15 @@ export function CompanyPicker({
         <Text style={loginStyles.label}>{label}</Text>
       ) : (
         <>
-          <Text style={caStyles.fieldLabel}>{label}</Text>
-          <Text style={[caStyles.fieldHint, { marginBottom: spacing.sm }]}>
+          <Text style={caStyles!.fieldLabel}>{label}</Text>
+          <Text style={[caStyles!.fieldHint, { marginBottom: spacing.sm }]}>
             Choose who you are joining. Your application and sign-in are scoped to this organization.
           </Text>
         </>
       )}
 
       <TouchableOpacity
-        style={variant === 'login' ? loginStyles.input : caStyles.input}
+        style={variant === 'login' ? loginStyles.input : caStyles!.input}
         onPress={() => setOpen(true)}
         activeOpacity={0.8}
         accessibilityRole="button"
@@ -74,7 +79,7 @@ export function CompanyPicker({
         />
         <Text
           style={[
-            variant === 'login' ? loginStyles.inputField : caStyles.inputField,
+            variant === 'login' ? loginStyles.inputField : caStyles!.inputField,
             !selectedName && pickerStyles.placeholder,
           ]}
           numberOfLines={1}
@@ -87,17 +92,17 @@ export function CompanyPicker({
       </TouchableOpacity>
 
       <Modal visible={open} transparent animationType="fade">
-        <Pressable style={caStyles.modalOverlay} onPress={() => setOpen(false)}>
+        <Pressable style={modalStyles.modalOverlay} onPress={() => setOpen(false)}>
           <TouchableWithoutFeedback>
-            <View style={caStyles.modalContent}>
+            <View style={modalStyles.modalContent}>
               {listingLoading ? (
                 <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
                   <ActivityIndicator color="#0056D2" />
-                  <Text style={[caStyles.modalOptionText, { marginTop: spacing.md }]}>Loading…</Text>
+                  <Text style={[modalStyles.modalOptionText, { marginTop: spacing.md }]}>Loading…</Text>
                 </View>
               ) : companies.length === 0 ? (
                 <View style={{ paddingVertical: spacing.xl, paddingHorizontal: spacing.lg }}>
-                  <Text style={[caStyles.modalOptionText, { textAlign: 'center' }]}>
+                  <Text style={[modalStyles.modalOptionText, { textAlign: 'center' }]}>
                     No organizations available. Check your connection and try again from the sign-in screen.
                   </Text>
                 </View>
@@ -105,14 +110,14 @@ export function CompanyPicker({
                 companies.map((c, idx) => (
                   <TouchableOpacity
                     key={c.slug}
-                    style={[caStyles.modalOption, idx === companies.length - 1 ? caStyles.modalOptionLast : null]}
+                    style={[modalStyles.modalOption, idx === companies.length - 1 ? modalStyles.modalOptionLast : null]}
                     onPress={() => {
                       onChange(c.slug);
                       setOpen(false);
                     }}
                     activeOpacity={0.7}
                   >
-                    <Text style={caStyles.modalOptionText}>{c.name}</Text>
+                    <Text style={modalStyles.modalOptionText}>{c.name}</Text>
                   </TouchableOpacity>
                 ))
               )}
@@ -127,4 +132,12 @@ export function CompanyPicker({
 const pickerStyles = StyleSheet.create({
   iconLeft: { marginRight: spacing.md },
   placeholder: { color: '#9CA3AF' },
+});
+
+const pickerModalStyles = StyleSheet.create({
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: spacing.xxxl },
+  modalContent: { backgroundColor: colors.white, borderRadius: 16, padding: spacing.lg },
+  modalOption: { paddingVertical: spacing.lg, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  modalOptionLast: { borderBottomWidth: 0 },
+  modalOptionText: { fontFamily: fontFamily.regular, fontSize: 16, color: colors.text.primary },
 });

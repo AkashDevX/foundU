@@ -17,13 +17,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { spacing, colors, fontFamily } from '../../theme/theme';
-import { loginScreenStyles } from '../../styles/styles';
+import { loginScreenStyles } from '../../styles/loginScreenStyles';
 import { CompanyPicker } from '../../components/CompanyPicker';
 import { SweetAlert } from '../../components/SweetAlert';
 import { useAppBootstrap } from '../../context/AppBootstrapContext';
 import { loginEmployee } from '../../services/loginApi';
 import { setAuthToken, setLastCompanySlug, setSessionAuthenticated } from '../../services/authSessionStorage';
-import { loadAccountProfile, saveAccountProfile } from '../../services/accountProfileStorage';
+import {
+  DEFAULT_ACCOUNT_PROFILE,
+  loadAccountProfile,
+  saveAccountProfile,
+} from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { API_BASE_URL } from '../../config/api';
 
@@ -158,29 +162,33 @@ export function LoginScreen() {
       await setLastCompanySlug(slug);
       try {
         const existing = await loadAccountProfile();
+        // Only carry over cached fields when the *same* user signs back in.
+        // A different account must start clean so the previous user's name/photo
+        // never leaks into the new session before /api/v1/me resolves.
+        const isSameUser =
+          !!existing.email &&
+          existing.email.trim().toLowerCase() === email.trim().toLowerCase();
+        const base = isSameUser ? existing : { ...DEFAULT_ACCOUNT_PROFILE };
         const org = companies.find((c) => c.slug === slug);
         await saveAccountProfile({
-          ...existing,
+          ...base,
           email: email.trim(),
           companySlug: slug,
           registrationCompanySlug: slug,
           ...(org
             ? {
                 companyName: org.name,
-                registrationCompanyAppKey: org.appKey ?? existing.registrationCompanyAppKey ?? undefined,
+                registrationCompanyAppKey: org.appKey ?? base.registrationCompanyAppKey ?? undefined,
               }
             : {}),
         });
-        // Prime `/api/v1/me` (including `profilePhotoUrl`) before Main so the header can show the photo
-        try {
-          await refreshAndCacheAccountProfileFromApi();
-        } catch {
-          /* best-effort */
-        }
       } catch {
         /* profile merge is best-effort */
       }
       goToMainApp();
+      void refreshAndCacheAccountProfileFromApi().catch(() => {
+        /* best-effort — Dashboard refreshes profile when the tab becomes active */
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setValidationAlert({

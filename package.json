@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
-    "android:clean-native": "node -e \"const fs=require('fs');const p=require('path');const rm=(d)=>{try{fs.rmSync(d,{recursive:true,force:true})}catch(e){}};['android/app/.cxx','android/build'].forEach(r=>rm(p.join(process.cwd(),r)));console.log('Removed android/app/.cxx and android/build');\"",
+    "android:clean-native": "node -e \"const fs=require('fs');const p=require('path');const root=process.cwd();const rm=(d)=>{try{fs.rmSync(d,{recursive:true,force:true})}catch(e){}};['android/app/.cxx','android/app/build','android/build'].forEach(r=>rm(p.join(root,r)));const nm=p.join(root,'node_modules');if(fs.existsSync(nm)){for(const pkg of fs.readdirSync(nm)){const b=p.join(nm,pkg,'android','build');if(fs.existsSync(b))rm(b);}}console.log('Removed Android native build caches (app, project, and node_modules/*/android/build)');\"",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",

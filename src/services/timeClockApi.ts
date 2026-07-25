@@ -1,18 +1,17 @@
 import { API_BASE_URL } from '../config/api';
+import { tryParseApiJson } from '../utils/parseApiJson';
+import {
+  mapTimeClockStatus,
+  type TimeClockStatus,
+} from '../utils/timeClockStatus';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile } from './accountProfileStorage';
 
-export type TimeClockStatus = {
-  is_clocked_in: boolean;
-  can_clock_in: boolean;
-  can_clock_out: boolean;
-  geofence_radius_meters: number;
-  assignment_ready: boolean;
-  assignment_not_ready_reason?: string | null;
-  open_session?: {
-    clocked_in_at: string | null;
-  } | null;
-};
+export type {
+  ScheduledShiftTimes,
+  TimeClockStatus,
+} from '../utils/timeClockStatus';
+export { mapTimeClockStatus, resolveGeofenceRadiusM } from '../utils/timeClockStatus';
 
 export type DeviceCoordinates = {
   latitude: number;
@@ -71,31 +70,6 @@ async function tenantAuthHeaders(): Promise<
   };
 }
 
-function mapTimeClockStatus(raw: unknown): TimeClockStatus | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const o = raw as Record<string, unknown>;
-  const openRaw = o.open_session;
-  let openSession: TimeClockStatus['open_session'] = null;
-  if (openRaw && typeof openRaw === 'object') {
-    const open = openRaw as Record<string, unknown>;
-    openSession = {
-      clocked_in_at: typeof open.clocked_in_at === 'string' ? open.clocked_in_at : null,
-    };
-  }
-
-  return {
-    is_clocked_in: o.is_clocked_in === true,
-    can_clock_in: o.can_clock_in === true,
-    can_clock_out: o.can_clock_out === true,
-    geofence_radius_meters:
-      typeof o.geofence_radius_meters === 'number' ? o.geofence_radius_meters : 100,
-    assignment_ready: o.assignment_ready === true,
-    assignment_not_ready_reason:
-      typeof o.assignment_issue === 'string' ? o.assignment_issue : null,
-    open_session: openSession,
-  };
-}
-
 export async function fetchTimeClockStatus(): Promise<
   | { ok: true; time_clock: TimeClockStatus; tenant_slug: string }
   | { ok: false; message: string }
@@ -117,12 +91,7 @@ export async function fetchTimeClockStatus(): Promise<
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (!res.ok) {
     const err = formatApiError(parsed, raw, res.status);
@@ -142,7 +111,7 @@ export async function fetchTimeClockStatus(): Promise<
 }
 
 async function postTimeClockPunch(
-  path: 'clock-in' | 'clock-out' | 'auto-clock-out',
+  path: 'clock-in' | 'clock-out' | 'auto-clock-out' | 'break-start' | 'break-end',
   coords: DeviceCoordinates,
   extraBody?: Record<string, unknown>,
 ): Promise<TimeClockPunchResult> {
@@ -171,12 +140,7 @@ async function postTimeClockPunch(
   }
 
   const raw = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    /* plain body */
-  }
+  const parsed = tryParseApiJson(raw);
 
   if (!res.ok) {
     const err = formatApiError(parsed, raw, res.status);
@@ -200,10 +164,22 @@ export async function postClockIn(coords: DeviceCoordinates): Promise<TimeClockP
   return postTimeClockPunch('clock-in', coords);
 }
 
-export async function postClockOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
-  return postTimeClockPunch('clock-out', coords);
+export async function postClockOut(
+  coords: DeviceCoordinates,
+  comment?: string | null,
+): Promise<TimeClockPunchResult> {
+  const trimmed = comment?.trim();
+  return postTimeClockPunch('clock-out', coords, trimmed ? { comment: trimmed } : undefined);
 }
 
 export async function postAutoClockOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
   return postTimeClockPunch('auto-clock-out', coords, { trigger: 'left_geofence' });
+}
+
+export async function postBreakIn(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
+  return postTimeClockPunch('break-start', coords);
+}
+
+export async function postBreakOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
+  return postTimeClockPunch('break-end', coords);
 }
