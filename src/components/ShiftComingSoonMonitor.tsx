@@ -8,7 +8,9 @@ import {
   requestShiftReminderNotificationPermission,
 } from '../services/notificationPermissions';
 import {
+  activeThresholdForMinutesUntil,
   pickShiftReminderCopy,
+  shouldShowShiftReminderPopups,
   SHIFT_REMINDER_ACTIVE_NOTIFICATION_ID,
   SHIFT_REMINDER_THRESHOLDS_MIN,
   type ShiftReminderThresholdMin,
@@ -51,6 +53,12 @@ export function ShiftComingSoonMonitor() {
   const inFlightRef = useRef(false);
   const scheduledStartHmRef = useRef<string | null>(null);
   const scheduledArmedRef = useRef<string | null>(null);
+  const lastArmRef = useRef<{
+    startHm: string;
+    startLabel: string;
+    ymd: string;
+    shiftStartMs: number;
+  } | null>(null);
   const missingShiftStreakRef = useRef(0);
   const permissionAskedRef = useRef(false);
   const nativeWarnedRef = useRef(false);
@@ -101,14 +109,10 @@ export function ShiftComingSoonMonitor() {
       const reminders = [];
       for (const threshold of SHIFT_REMINDER_THRESHOLDS_MIN) {
         if (await hasFiredShiftReminder(ymd, startHm, threshold)) continue;
-        let triggerAtMs = shiftStartMs - threshold * 60_000;
-        if (triggerAtMs >= shiftStartMs - 1_000) continue;
-
-        // Due windows still need a short-delayed AlarmClock so shade delivery works
-        // after Home / Recents swipe (fireReminder covers the immediate in-app path).
-        if (triggerAtMs <= now + 5_000) {
-          triggerAtMs = now + 12_000;
-        }
+        const triggerAtMs = shiftStartMs - threshold * 60_000;
+        // Only arm future threshold moments. Do not rephrase an overdue window
+        // (e.g. 8 minutes left) as a delayed "15 minutes" notification.
+        if (triggerAtMs <= now + 5_000) continue;
         if (triggerAtMs >= shiftStartMs - 1_000) continue;
 
         const copy = pickShiftReminderCopy(threshold, `${ymd}:${threshold}:${startHm}`, startLabel);
@@ -130,6 +134,12 @@ export function ShiftComingSoonMonitor() {
     [],
   );
 
+  const flushNativeAlarmsForBackground = useCallback(async () => {
+    const armed = lastArmRef.current;
+    if (!armed) return;
+    await scheduleNativeAlarms(armed.startHm, armed.startLabel, armed.ymd, armed.shiftStartMs);
+  }, [scheduleNativeAlarms]);
+
   const fireReminder = useCallback(
     async (
       threshold: ShiftReminderThresholdMin,
@@ -148,6 +158,7 @@ export function ShiftComingSoonMonitor() {
         copy.notificationBody,
         notificationId,
         shiftStartMs,
+        threshold,
       );
       if (!result.ok && __DEV__) {
         console.warn('[ShiftReminder] system notification not posted:', result.reason);
@@ -172,10 +183,10 @@ export function ShiftComingSoonMonitor() {
       const authed = await getSessionAuthenticated();
       if (!authed) {
         // Only cancel when this session had armed reminders (logout / session end).
-        // Avoid wiping native ARM_TEST / leftover AlarmClock schedules on cold start.
         if (scheduledArmedRef.current != null || scheduledStartHmRef.current != null) {
           scheduledStartHmRef.current = null;
           scheduledArmedRef.current = null;
+          lastArmRef.current = null;
           await clearTrayReminder();
         }
         return;
@@ -230,6 +241,7 @@ export function ShiftComingSoonMonitor() {
       if (timeClock.is_clocked_in) {
         scheduledStartHmRef.current = null;
         scheduledArmedRef.current = null;
+        lastArmRef.current = null;
         await clearTrayReminder();
         return;
       }
@@ -241,6 +253,7 @@ export function ShiftComingSoonMonitor() {
         if (missingShiftStreakRef.current >= 3) {
           scheduledStartHmRef.current = null;
           scheduledArmedRef.current = null;
+          lastArmRef.current = null;
           await clearTrayReminder();
         }
         return;
@@ -251,25 +264,41 @@ export function ShiftComingSoonMonitor() {
       const minutesUntil = minutesUntilTodayShiftStart(shift.start_time);
       const shiftStartMs = approxShiftStartUtcMs(shift.start_time);
 
-      // Reminder is only valid until the shift starts.
+      // After shift start: stop all reminder popups / alarms.
       if (minutesUntil == null || minutesUntil <= 0 || shiftStartMs == null) {
         scheduledStartHmRef.current = null;
         scheduledArmedRef.current = null;
+        lastArmRef.current = null;
+        await clearTrayReminder();
+        return;
+      }
+
+      // Under 15 minutes remaining: no more popup notifications.
+      if (!shouldShowShiftReminderPopups(minutesUntil)) {
+        scheduledStartHmRef.current = null;
+        scheduledArmedRef.current = null;
+        lastArmRef.current = null;
         await clearTrayReminder();
         return;
       }
 
       scheduledStartHmRef.current = shift.start_time;
+      lastArmRef.current = {
+        startHm: shift.start_time,
+        startLabel: shift.start_label,
+        ymd,
+        shiftStartMs,
+      };
 
       // Arm native AlarmClock once per shift start time BEFORE firing due windows.
       // Re-arming every poll was cancelling alarms every few seconds and broke
-      // background delivery after Recents swipe-away.
+      // background delivery after Recents swipe-away. Native side is now idempotent.
       if (scheduledArmedRef.current !== shift.start_time) {
         scheduledArmedRef.current = shift.start_time;
         await scheduleNativeAlarms(shift.start_time, shift.start_label, ymd, shiftStartMs);
       }
 
-      const threshold = SHIFT_REMINDER_THRESHOLDS_MIN.find((t) => minutesUntil <= t);
+      const threshold = activeThresholdForMinutesUntil(minutesUntil);
       if (threshold != null) {
         await fireReminder(threshold, ymd, shift.start_time, shift.start_label, shiftStartMs);
       }
@@ -291,9 +320,13 @@ export function ShiftComingSoonMonitor() {
     }, POLL_INTERVAL_MS);
 
     const onAppState = (next: AppStateStatus) => {
-      const wasBackground = appStateRef.current.match(/inactive|background/);
+      const prev = appStateRef.current;
       appStateRef.current = next;
-      if (wasBackground && next === 'active') {
+      // Leaving the app: re-apply AlarmClock so shade delivery works after Home / Recents.
+      if (prev === 'active' && (next === 'inactive' || next === 'background')) {
+        void flushNativeAlarmsForBackground();
+      }
+      if ((prev === 'inactive' || prev === 'background') && next === 'active') {
         void loadPendingAlert();
         void evaluate();
       }
@@ -308,7 +341,7 @@ export function ShiftComingSoonMonitor() {
       sub.remove();
       unsubClock();
     };
-  }, [evaluate, loadPendingAlert]);
+  }, [evaluate, flushNativeAlarmsForBackground, loadPendingAlert]);
 
   return (
     <SweetAlert

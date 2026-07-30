@@ -1,6 +1,8 @@
 import {
+  activeThresholdForMinutesUntil,
   notificationIdForThreshold,
   pickShiftReminderCopy,
+  shouldShowShiftReminderPopups,
   SHIFT_REMINDER_THRESHOLDS_MIN,
 } from '../src/services/shiftReminderCopy';
 import {
@@ -43,17 +45,26 @@ describe('shiftReminderCopy', () => {
     expect(copy.notificationBody).not.toMatch(/[-–—]/);
   });
 
-  it('selects the tightest applicable threshold the same way the monitor does', () => {
-    const pick = (minutesUntil: number) =>
-      SHIFT_REMINDER_THRESHOLDS_MIN.find((t) => minutesUntil <= t) ?? null;
+  it('uses exclusive bands so under 15 minutes does not show a 15 minute reminder', () => {
+    expect(activeThresholdForMinutesUntil(70)).toBeNull();
+    expect(activeThresholdForMinutesUntil(60)).toBe(60);
+    expect(activeThresholdForMinutesUntil(45)).toBe(60);
+    expect(activeThresholdForMinutesUntil(31)).toBe(60);
+    expect(activeThresholdForMinutesUntil(30)).toBe(30);
+    expect(activeThresholdForMinutesUntil(20)).toBe(30);
+    expect(activeThresholdForMinutesUntil(16)).toBe(30);
+    expect(activeThresholdForMinutesUntil(15)).toBe(15);
+    expect(activeThresholdForMinutesUntil(14)).toBeNull();
+    expect(activeThresholdForMinutesUntil(5)).toBeNull();
+    expect(activeThresholdForMinutesUntil(0)).toBeNull();
+  });
 
-    expect(pick(70)).toBeNull();
-    expect(pick(60)).toBe(60);
-    expect(pick(45)).toBe(60);
-    expect(pick(30)).toBe(30);
-    expect(pick(20)).toBe(30);
-    expect(pick(15)).toBe(15);
-    expect(pick(5)).toBe(15);
+  it('blocks all reminder popups once under 15 minutes remain', () => {
+    expect(shouldShowShiftReminderPopups(60)).toBe(true);
+    expect(shouldShowShiftReminderPopups(15)).toBe(true);
+    expect(shouldShowShiftReminderPopups(14)).toBe(false);
+    expect(shouldShowShiftReminderPopups(1)).toBe(false);
+    expect(shouldShowShiftReminderPopups(0)).toBe(false);
   });
 });
 

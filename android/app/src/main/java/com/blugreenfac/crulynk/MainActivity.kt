@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import com.blugreenfac.crulynk.shift.ShiftReminderNotifier
 import com.blugreenfac.crulynk.shift.ShiftReminderReceiver
+import com.blugreenfac.crulynk.shift.ShiftReminderScheduler
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -32,16 +33,23 @@ class MainActivity : ReactActivity() {
     val title = intent.getStringExtra(EXTRA_SHIFT_REMINDER_TITLE)?.trim().orEmpty()
     if (title.isEmpty()) return
 
+    val expiresAtMs = intent.getLongExtra(EXTRA_SHIFT_REMINDER_EXPIRES_AT_MS, 0L)
+    // Stale alarm after shift start (or under 15 minutes left): never revive popups.
+    if (!ShiftReminderScheduler.isReminderPopupWindowOpen(expiresAtMs)) {
+      ShiftReminderScheduler.cancelScheduled(this, clearNotification = true)
+      intent.removeExtra(EXTRA_SHIFT_REMINDER_TITLE)
+      intent.removeExtra(EXTRA_SHIFT_REMINDER_MESSAGE)
+      intent.removeExtra(EXTRA_SHIFT_REMINDER_BODY)
+      return
+    }
+
     val message = intent.getStringExtra(EXTRA_SHIFT_REMINDER_MESSAGE)?.trim().orEmpty()
       .ifEmpty { intent.getStringExtra(EXTRA_SHIFT_REMINDER_BODY)?.trim().orEmpty() }
       .ifEmpty { "Your assigned shift is coming up soon." }
     val body = intent.getStringExtra(EXTRA_SHIFT_REMINDER_BODY)?.trim().orEmpty()
       .ifEmpty { message }
-    val expiresAtMs = intent.getLongExtra(EXTRA_SHIFT_REMINDER_EXPIRES_AT_MS, 0L)
-      .takeIf { it > System.currentTimeMillis() }
-      ?: (System.currentTimeMillis() + 30 * 60_000L)
+    val threshold = intent.getIntExtra(EXTRA_SHIFT_REMINDER_THRESHOLD, 0)
 
-    // Always post/refresh the system tray notification first.
     ShiftReminderNotifier.post(
       context = this,
       title = title,
@@ -49,25 +57,13 @@ class MainActivity : ReactActivity() {
       notificationId = ShiftReminderNotifier.ACTIVE_NOTIFICATION_ID,
       expiresAtMs = expiresAtMs,
       alertMessage = message,
+      thresholdMin = threshold,
     )
-
-    // Ensure JS SweetAlert can pick this up if the user opens the app.
-    getSharedPreferences(ShiftReminderReceiver.PREFS, MODE_PRIVATE)
-      .edit()
-      .putString(ShiftReminderReceiver.KEY_PENDING_TITLE, title)
-      .putString(ShiftReminderReceiver.KEY_PENDING_MESSAGE, message)
-      .apply()
 
     // Prevent repeat handling on rotation / recreate.
     intent.removeExtra(EXTRA_SHIFT_REMINDER_TITLE)
     intent.removeExtra(EXTRA_SHIFT_REMINDER_MESSAGE)
     intent.removeExtra(EXTRA_SHIFT_REMINDER_BODY)
-
-    // Yield immediately so the heads-up / shade popup stays visible instead of
-    // feeling like an in-app-only alert after AlarmClock wakes the process.
-    window.decorView.post {
-      moveTaskToBack(true)
-    }
   }
 
   companion object {

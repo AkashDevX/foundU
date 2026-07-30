@@ -36,7 +36,6 @@
           <action android:name="com.blugreenfac.crulynk.shift.FIRE_REMINDER" />
           <action android:name="com.blugreenfac.crulynk.shift.CLEAR_REMINDER" />
           <action android:name="com.blugreenfac.crulynk.shift.WATCHDOG" />
-          <action android:name="com.blugreenfac.crulynk.shift.ARM_TEST" />
         </intent-filter>
         <intent-filter>
           <action android:name="android.intent.action.BOOT_COMPLETED" />

@@ -3,6 +3,7 @@ package com.blugreenfac.crulynk.shift
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 
 class ShiftReminderReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent?) {
@@ -12,12 +13,6 @@ class ShiftReminderReceiver : BroadcastReceiver() {
       }
       ACTION_WATCHDOG -> {
         ShiftReminderScheduler.onWatchdog(context)
-      }
-      ACTION_ARM_TEST -> {
-        val seconds = intent.getIntExtra(EXTRA_TEST_DELAY_SECONDS, -1)
-          .takeIf { it > 0 }
-          ?: intent.getIntExtra("delay_sec", 45)
-        ShiftReminderScheduler.armTestReminder(context, seconds)
       }
       Intent.ACTION_BOOT_COMPLETED,
       Intent.ACTION_LOCKED_BOOT_COMPLETED,
@@ -29,40 +24,53 @@ class ShiftReminderReceiver : BroadcastReceiver() {
         ShiftReminderScheduler.rescheduleFromStorage(context)
       }
       else -> {
-        val title = intent?.getStringExtra(EXTRA_TITLE)?.trim().orEmpty()
-          .ifEmpty { "Shift coming soon" }
-        val body = intent?.getStringExtra(EXTRA_BODY)?.trim().orEmpty()
-          .ifEmpty { "Your assigned shift is almost here." }
-        val alertMessage = intent?.getStringExtra(EXTRA_ALERT_MESSAGE)?.trim().orEmpty()
-          .ifEmpty { body }
-        val expiresAtMs = intent?.getLongExtra(EXTRA_EXPIRES_AT_MS, 0L)
-          ?.takeIf { it > System.currentTimeMillis() }
-          ?: (System.currentTimeMillis() + 60_000L)
-        val threshold = intent?.getIntExtra(EXTRA_THRESHOLD_MIN, 0) ?: 0
+        val pendingResult = goAsync()
+        val wakeLock = acquireBriefWakeLock(context)
+        try {
+          val title = intent?.getStringExtra(EXTRA_TITLE)?.trim().orEmpty()
+            .ifEmpty { "Shift coming soon" }
+          val body = intent?.getStringExtra(EXTRA_BODY)?.trim().orEmpty()
+            .ifEmpty { "Your assigned shift is almost here." }
+          val alertMessage = intent?.getStringExtra(EXTRA_ALERT_MESSAGE)?.trim().orEmpty()
+            .ifEmpty { body }
+          val expiresAtMs = intent?.getLongExtra(EXTRA_EXPIRES_AT_MS, 0L) ?: 0L
+          val threshold = intent?.getIntExtra(EXTRA_THRESHOLD_MIN, 0) ?: 0
 
-        if (expiresAtMs <= System.currentTimeMillis()) {
-          ShiftReminderScheduler.cancelScheduled(context, clearNotification = true)
-          return
-        }
+          if (!ShiftReminderScheduler.isReminderPopupWindowOpen(expiresAtMs)) {
+            ShiftReminderScheduler.cancelScheduled(context, clearNotification = true)
+            return
+          }
 
-        // Broadcast backup: post shade notification. Do not force-launch UI here
-        // (AlarmClock Activity path already handles waking the app).
-        ShiftReminderNotifier.post(
-          context = context,
-          title = title,
-          body = body,
-          notificationId = ShiftReminderNotifier.ACTIVE_NOTIFICATION_ID,
-          expiresAtMs = expiresAtMs,
-          alertMessage = alertMessage,
-        )
-
-        if (threshold > 0) {
-          context.getSharedPreferences("foundu_shift_reminder_schedule_v1", Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("watchdog_fired_$threshold", true)
-            .apply()
+          ShiftReminderNotifier.post(
+            context = context,
+            title = title,
+            body = body,
+            notificationId = ShiftReminderNotifier.ACTIVE_NOTIFICATION_ID,
+            expiresAtMs = expiresAtMs,
+            alertMessage = alertMessage,
+            thresholdMin = threshold,
+          )
+        } finally {
+          try {
+            if (wakeLock?.isHeld == true) wakeLock.release()
+          } catch (_: Exception) {
+            /* ignore */
+          }
+          pendingResult.finish()
         }
       }
+    }
+  }
+
+  private fun acquireBriefWakeLock(context: Context): PowerManager.WakeLock? {
+    return try {
+      val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+      pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "crulynk:shift-fire").apply {
+        setReferenceCounted(false)
+        acquire(15_000L)
+      }
+    } catch (_: Exception) {
+      null
     }
   }
 
@@ -78,8 +86,6 @@ class ShiftReminderReceiver : BroadcastReceiver() {
     const val ACTION_FIRE = "com.blugreenfac.crulynk.shift.FIRE_REMINDER"
     const val ACTION_CLEAR = "com.blugreenfac.crulynk.shift.CLEAR_REMINDER"
     const val ACTION_WATCHDOG = "com.blugreenfac.crulynk.shift.WATCHDOG"
-    const val ACTION_ARM_TEST = "com.blugreenfac.crulynk.shift.ARM_TEST"
-    const val EXTRA_TEST_DELAY_SECONDS = "test_delay_seconds"
 
     const val PREFS = "foundu_shift_reminders"
     const val KEY_PENDING_TITLE = "pending_title"

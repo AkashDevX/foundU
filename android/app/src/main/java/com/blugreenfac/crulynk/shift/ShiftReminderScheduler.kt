@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import com.blugreenfac.crulynk.MainActivity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,16 +13,16 @@ import org.json.JSONObject
 /**
  * Persists shift reminder alarms and schedules them with [AlarmManager.setAlarmClock].
  *
- * The AlarmClock PendingIntent targets [MainActivity] so Android will wake the UI even after
- * the app is swiped away from Recents. A BroadcastReceiver is also armed as a backup to post
- * the status-bar notification.
+ * Primary delivery is AlarmClock -> Broadcast (posts the shade notification even after
+ * Recents swipe). Exact activity + broadcast backups cover OEM quirks.
  */
 internal object ShiftReminderScheduler {
   private const val PREFS = "foundu_shift_reminder_schedule_v1"
   private const val KEY_PAYLOAD = "payload"
+  private const val KEY_FINGERPRINT = "fingerprint"
   private const val WATCHDOG_REQUEST_CODE = 2299
   private const val CLEAR_REQUEST_CODE = 2298
-  private const val WATCHDOG_INTERVAL_MS = 5 * 60_000L
+  private const val WATCHDOG_INTERVAL_MS = 90_000L
 
   data class Reminder(
     val thresholdMin: Int,
@@ -34,11 +35,21 @@ internal object ShiftReminderScheduler {
   )
 
   fun saveAndSchedule(context: Context, reminders: List<Reminder>) {
-    // Do not preserve old fired flags across a fresh schedule — they blocked re-delivery.
+    val fingerprint = fingerprintFor(reminders)
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    val existing = prefs.getString(KEY_FINGERPRINT, null)
+
+    // Same schedule: do not cancel (that race drops alarms if the process dies mid-write).
+    // Still re-apply AlarmClock entries in case the OEM dropped them after Recents swipe.
+    if (reminders.isNotEmpty() && existing == fingerprint && prefs.getString(KEY_PAYLOAD, null) != null) {
+      scheduleFromPayload(context)
+      return
+    }
+
     cancelScheduled(context, clearNotification = false)
     ShiftReminderNotifier.clearDeliveryFlags(context)
     if (reminders.isEmpty()) {
-      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+      prefs.edit().clear().apply()
       return
     }
 
@@ -56,9 +67,9 @@ internal object ShiftReminderScheduler {
           .put("alarmRequestCode", reminder.alarmRequestCode),
       )
     }
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-      .edit()
+    prefs.edit()
       .clear()
+      .putString(KEY_FINGERPRINT, fingerprint)
       .putString(
         KEY_PAYLOAD,
         JSONObject()
@@ -96,9 +107,7 @@ internal object ShiftReminderScheduler {
             expiresAtMs = item.optLong("expiresAtMs", 0L),
             alarmRequestCode = code,
           )
-          alarmManager.cancel(activityPendingIntent(context, reminder, code))
-          alarmManager.cancel(broadcastPendingIntent(context, reminder, code))
-          alarmManager.cancel(broadcastPendingIntent(context, reminder, code + 5000))
+          cancelReminderAlarms(alarmManager, context, reminder, code)
         }
       } catch (_: Exception) {
         /* ignore corrupt cache */
@@ -109,50 +118,57 @@ internal object ShiftReminderScheduler {
     prefs.edit().clear().apply()
     if (clearNotification) {
       ShiftReminderNotifier.cancelAllActive(context)
+    } else {
+      ShiftReminderNotifier.clearPendingAlert(context)
     }
   }
 
   fun onWatchdog(context: Context) {
-    val now = System.currentTimeMillis()
-    val payload = readPayload(context) ?: return
-    val expiresAtMs = payload.optLong("expiresAtMs", 0L)
-    if (expiresAtMs <= now) {
-      cancelScheduled(context, clearNotification = true)
-      return
-    }
+    val wakeLock = acquireBriefWakeLock(context, "crulynk:shift-watchdog")
+    try {
+      val now = System.currentTimeMillis()
+      val payload = readPayload(context) ?: return
+      val expiresAtMs = payload.optLong("expiresAtMs", 0L)
 
-    val reminders = payload.optJSONArray("reminders") ?: JSONArray()
-    var due: JSONObject? = null
-    for (i in 0 until reminders.length()) {
-      val item = reminders.getJSONObject(i)
-      val triggerAtMs = item.optLong("triggerAtMs", 0L)
-      val threshold = item.optInt("thresholdMin", 0)
-      if (triggerAtMs <= now && threshold > 0) {
-        if (due == null || threshold < due.optInt("thresholdMin", Int.MAX_VALUE)) {
-          due = item
+      // Shift started, or under 15 minutes left: stop all reminder popups permanently.
+      if (!isReminderPopupWindowOpen(expiresAtMs)) {
+        cancelScheduled(context, clearNotification = true)
+        return
+      }
+
+      val reminders = payload.optJSONArray("reminders") ?: JSONArray()
+      var due: JSONObject? = null
+      for (i in 0 until reminders.length()) {
+        val item = reminders.getJSONObject(i)
+        val triggerAtMs = item.optLong("triggerAtMs", 0L)
+        val threshold = item.optInt("thresholdMin", 0)
+        if (triggerAtMs <= now && threshold > 0) {
+          if (due == null || threshold < due.optInt("thresholdMin", Int.MAX_VALUE)) {
+            due = item
+          }
         }
       }
-    }
 
-    if (due != null) {
-      val threshold = due.optInt("thresholdMin", 0)
-      val firedKey = "watchdog_fired_$threshold"
-      val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-      // Re-post shade card if it was dismissed; do not force-open the app.
-      deliverReminder(
-        context = context,
-        title = due.optString("title", "Shift coming soon"),
-        body = due.optString("body", "Your assigned shift is almost here."),
-        alertMessage = due.optString("alertMessage", due.optString("body")),
-        expiresAtMs = expiresAtMs,
-        launchUi = false,
-      )
-      if (!prefs.getBoolean(firedKey, false)) {
-        prefs.edit().putBoolean(firedKey, true).apply()
+      if (due != null) {
+        val threshold = due.optInt("thresholdMin", 0)
+        if (!ShiftReminderNotifier.hasDeliveredThreshold(context, threshold)) {
+          deliverReminder(
+            context = context,
+            title = due.optString("title", "Shift coming soon"),
+            body = due.optString("body", "Your assigned shift is almost here."),
+            alertMessage = due.optString("alertMessage", due.optString("body")),
+            expiresAtMs = expiresAtMs,
+            thresholdMin = threshold,
+            launchUi = false,
+          )
+        }
       }
-    }
 
-    scheduleWatchdog(context, expiresAtMs)
+      // Still-future alarms may have been dropped by the OEM — re-arm them.
+      scheduleFromPayload(context)
+    } finally {
+      releaseWakeLock(wakeLock)
+    }
   }
 
   fun deliverReminder(
@@ -161,8 +177,14 @@ internal object ShiftReminderScheduler {
     body: String,
     alertMessage: String,
     expiresAtMs: Long,
+    thresholdMin: Int = 0,
     launchUi: Boolean,
   ) {
+    if (!isReminderPopupWindowOpen(expiresAtMs)) {
+      cancelScheduled(context, clearNotification = true)
+      return
+    }
+
     val posted = ShiftReminderNotifier.post(
       context = context,
       title = title,
@@ -170,10 +192,11 @@ internal object ShiftReminderScheduler {
       notificationId = ShiftReminderNotifier.ACTIVE_NOTIFICATION_ID,
       expiresAtMs = expiresAtMs,
       alertMessage = alertMessage,
+      thresholdMin = thresholdMin,
     )
 
-    // Only open the app when the shade notification could not be shown.
     if (launchUi || !posted) {
+      if (!isReminderPopupWindowOpen(expiresAtMs)) return
       val launch = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
           Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -182,6 +205,7 @@ internal object ShiftReminderScheduler {
         putExtra(MainActivity.EXTRA_SHIFT_REMINDER_MESSAGE, alertMessage.ifBlank { body })
         putExtra(MainActivity.EXTRA_SHIFT_REMINDER_BODY, body)
         putExtra(MainActivity.EXTRA_SHIFT_REMINDER_EXPIRES_AT_MS, expiresAtMs)
+        putExtra(MainActivity.EXTRA_SHIFT_REMINDER_THRESHOLD, thresholdMin)
       }
       try {
         context.startActivity(launch)
@@ -191,11 +215,24 @@ internal object ShiftReminderScheduler {
     }
   }
 
+  /**
+   * Popup reminders are allowed only while at least 15 minutes remain before shift start.
+   * After that (and after shift start) all reminder popups must stop.
+   */
+  fun isReminderPopupWindowOpen(expiresAtMs: Long, now: Long = System.currentTimeMillis()): Boolean {
+    if (expiresAtMs <= 0L) return false
+    if (now >= expiresAtMs) return false
+    return now < popupSilenceAtMs(expiresAtMs)
+  }
+
+  /** Moment when under-15-minutes silence begins (15 minutes before shift start). */
+  fun popupSilenceAtMs(expiresAtMs: Long): Long = expiresAtMs - 15L * 60_000L + 30_000L
+
   private fun scheduleFromPayload(context: Context) {
     val payload = readPayload(context) ?: return
     val now = System.currentTimeMillis()
     val expiresAtMs = payload.optLong("expiresAtMs", 0L)
-    if (expiresAtMs <= now) {
+    if (!isReminderPopupWindowOpen(expiresAtMs, now)) {
       cancelScheduled(context, clearNotification = true)
       return
     }
@@ -206,11 +243,15 @@ internal object ShiftReminderScheduler {
       val item = reminders.getJSONObject(i)
       val triggerAtMs = item.optLong("triggerAtMs", 0L)
       val code = item.optInt("alarmRequestCode", 0)
+      val threshold = item.optInt("thresholdMin", 0)
       if (code == 0 || triggerAtMs <= now + 2_000L) continue
       if (triggerAtMs >= expiresAtMs) continue
+      // Do not arm alarms that would fire after the under-15 silence window begins.
+      if (triggerAtMs > popupSilenceAtMs(expiresAtMs)) continue
+      if (ShiftReminderNotifier.hasDeliveredThreshold(context, threshold)) continue
 
       val reminder = Reminder(
-        thresholdMin = item.optInt("thresholdMin", 0),
+        thresholdMin = threshold,
         title = item.optString("title"),
         body = item.optString("body"),
         alertMessage = item.optString("alertMessage"),
@@ -219,15 +260,14 @@ internal object ShiftReminderScheduler {
         alarmRequestCode = code,
       )
 
-      // Primary: AlarmClock -> Activity (reliable on Samsung after Home / Recents).
-      // MainActivity posts the shade notification then yields to the launcher.
+      // Primary: AlarmClock -> Broadcast posts shade notification (survives Recents).
       setAlarmClock(
         alarmManager,
         triggerAtMs,
-        activityPendingIntent(context, reminder, code),
+        broadcastPendingIntent(context, reminder, code),
         context,
       )
-      // Backup: exact broadcast posts the tray even if the activity path is deferred.
+      // Single exact backup (deduped in Notifier so it will not re-alert).
       setExactBackup(
         alarmManager,
         triggerAtMs + 1_500L,
@@ -235,8 +275,11 @@ internal object ShiftReminderScheduler {
       )
     }
 
-    setAlarmClock(alarmManager, expiresAtMs, clearPendingIntent(context), context)
-    scheduleWatchdog(context, expiresAtMs)
+    // Clear tray / schedule once we enter under-15 silence (or at shift start as fallback).
+    val silenceAt = popupSilenceAtMs(expiresAtMs)
+    val clearAt = if (silenceAt > now + 2_000L) silenceAt else expiresAtMs
+    setAlarmClock(alarmManager, clearAt, clearPendingIntent(context), context)
+    scheduleWatchdog(context, clearAt)
   }
 
   private fun scheduleWatchdog(context: Context, expiresAtMs: Long) {
@@ -285,6 +328,18 @@ internal object ShiftReminderScheduler {
         /* give up */
       }
     }
+  }
+
+  private fun cancelReminderAlarms(
+    alarmManager: AlarmManager,
+    context: Context,
+    reminder: Reminder,
+    code: Int,
+  ) {
+    alarmManager.cancel(broadcastPendingIntent(context, reminder, code))
+    alarmManager.cancel(broadcastPendingIntent(context, reminder, code + 5000))
+    alarmManager.cancel(activityPendingIntent(context, reminder, code))
+    alarmManager.cancel(activityPendingIntent(context, reminder, code + 7000))
   }
 
   private fun activityPendingIntent(
@@ -376,22 +431,34 @@ internal object ShiftReminderScheduler {
     }
   }
 
-  fun alarmRequestCodeForThreshold(thresholdMin: Int): Int = 2100 + thresholdMin
-
-  /** Arms a one-shot demo reminder for QA (AlarmClock + tray), independent of shift API. */
-  fun armTestReminder(context: Context, delaySeconds: Int) {
-    val delayMs = delaySeconds.coerceIn(5, 600) * 1000L
-    val triggerAtMs = System.currentTimeMillis() + delayMs
-    val expiresAtMs = triggerAtMs + 30 * 60_000L
-    val reminder = Reminder(
-      thresholdMin = 15,
-      title = "Shift reminder test",
-      body = "CruLynk background alert works. This popup was scheduled while the app was armed.",
-      alertMessage = "Background shift reminder test succeeded. If you see this after clearing Recents, delivery is working.",
-      triggerAtMs = triggerAtMs,
-      expiresAtMs = expiresAtMs,
-      alarmRequestCode = 2199,
-    )
-    saveAndSchedule(context, listOf(reminder))
+  private fun fingerprintFor(reminders: List<Reminder>): String {
+    if (reminders.isEmpty()) return "empty"
+    return reminders
+      .sortedBy { it.alarmRequestCode }
+      .joinToString("|") {
+        "${it.alarmRequestCode}:${it.triggerAtMs}:${it.expiresAtMs}:${it.thresholdMin}"
+      }
   }
+
+  private fun acquireBriefWakeLock(context: Context, tag: String): PowerManager.WakeLock? {
+    return try {
+      val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+      pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag).apply {
+        setReferenceCounted(false)
+        acquire(15_000L)
+      }
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  private fun releaseWakeLock(wakeLock: PowerManager.WakeLock?) {
+    try {
+      if (wakeLock?.isHeld == true) wakeLock.release()
+    } catch (_: Exception) {
+      /* ignore */
+    }
+  }
+
+  fun alarmRequestCodeForThreshold(thresholdMin: Int): Int = 2100 + thresholdMin
 }

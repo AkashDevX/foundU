@@ -94,6 +94,30 @@ function stripHyphens(text: string): string {
 }
 
 /**
+ * Exclusive reminder bands so copy matches remaining time:
+ * - 60 min: more than 30 and up to 60
+ * - 30 min: more than 15 and up to 30
+ * - 15 min: about 15 only
+ * Under 15 minutes remaining: no reminder popups at all.
+ */
+export function activeThresholdForMinutesUntil(
+  minutesUntil: number,
+): ShiftReminderThresholdMin | null {
+  if (!Number.isFinite(minutesUntil) || minutesUntil <= 0 || minutesUntil > 60) {
+    return null;
+  }
+  if (minutesUntil > 30) return 60;
+  if (minutesUntil > 15) return 30;
+  if (minutesUntil >= 15) return 15;
+  return null;
+}
+
+/** True when reminder popups are allowed (at least 15 minutes before start). */
+export function shouldShowShiftReminderPopups(minutesUntil: number): boolean {
+  return Number.isFinite(minutesUntil) && minutesUntil >= 15;
+}
+
+/**
  * Picks a stable fancy tagline for a given day + threshold so the same reminder
  * does not flip wording if the monitor re-runs.
  */
