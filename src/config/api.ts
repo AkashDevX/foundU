@@ -35,7 +35,8 @@ export const USE_LIVE_API_IN_DEBUG = false;
  * Ignored on Android emulator — emulator always uses `10.0.2.2`.
  * Ignored when `DEV_API_USE_ADB_REVERSE` is true (USB debugging tunnel).
  */
-export const DEV_API_HOST_OVERRIDE: string | null = '192.168.8.166';
+// export const DEV_API_HOST_OVERRIDE: string | null = '192.168.8.166';
+export const DEV_API_HOST_OVERRIDE: string | null = '10.138.119.219';
 
 /**
  * USB debugging tunnel — no Wi‑Fi or firewall setup needed.

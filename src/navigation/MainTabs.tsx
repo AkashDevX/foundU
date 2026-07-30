@@ -11,6 +11,7 @@ import {
 import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GeofenceAutoClockOutMonitor } from '../components/GeofenceAutoClockOutMonitor';
+import { ShiftComingSoonMonitor } from '../components/ShiftComingSoonMonitor';
 import { LogoutSweetAlertProvider } from '../context/LogoutSweetAlertContext';
 import { colors, fontFamily } from '../theme/theme';
 import { DashboardScreen } from '../screens/DashboardScreen';
@@ -271,6 +272,7 @@ export function MainTabs() {
   return (
     <LogoutSweetAlertProvider>
       {monitorReady ? <GeofenceAutoClockOutMonitor /> : null}
+      {monitorReady ? <ShiftComingSoonMonitor /> : null}
 
       <View style={styles.container}>
         <View style={styles.screenStack}>

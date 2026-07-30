@@ -22,6 +22,12 @@ import { CompanyPicker } from '../../components/CompanyPicker';
 import { SweetAlert } from '../../components/SweetAlert';
 import { useAppBootstrap } from '../../context/AppBootstrapContext';
 import { loginEmployee } from '../../services/loginApi';
+import {
+  requestPasswordResetOtp,
+  resetPasswordWithToken,
+  validateNewPassword,
+  verifyPasswordResetOtp,
+} from '../../services/forgotPasswordApi';
 import { setAuthToken, setLastCompanySlug, setSessionAuthenticated } from '../../services/authSessionStorage';
 import {
   DEFAULT_ACCOUNT_PROFILE,
@@ -30,6 +36,8 @@ import {
 } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { API_BASE_URL } from '../../config/api';
+
+type ForgotStep = 'email' | 'otp' | 'password' | 'done';
 
 type MissingField = 'company' | 'email' | 'password';
 
@@ -89,31 +97,187 @@ export function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [forgotModalVisible, setForgotModalVisible] = useState(false);
+  const [forgotStep, setForgotStep] = useState<ForgotStep>('email');
   const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotEmailSent, setForgotEmailSent] = useState(false);
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotResetToken, setForgotResetToken] = useState<string | null>(null);
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotShowPassword, setForgotShowPassword] = useState(false);
+  const [forgotShowConfirmPassword, setForgotShowConfirmPassword] = useState(false);
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [validationAlert, setValidationAlert] = useState<{ title: string; message: string } | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
 
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const forgotEmailRef = useRef<TextInput>(null);
+  const forgotOtpRef = useRef<TextInput>(null);
+  const forgotNewPasswordRef = useRef<TextInput>(null);
+  const forgotConfirmPasswordRef = useRef<TextInput>(null);
 
   const styles = loginScreenStyles;
 
+  const resetForgotState = () => {
+    setForgotStep('email');
+    setForgotOtp('');
+    setForgotResetToken(null);
+    setForgotNewPassword('');
+    setForgotConfirmPassword('');
+    setForgotShowPassword(false);
+    setForgotShowConfirmPassword(false);
+    setForgotSubmitting(false);
+  };
+
   const openForgotModal = () => {
+    if (!companySlug) {
+      setValidationAlert({
+        title: 'Company required',
+        message: 'Select your organization before resetting your password.',
+      });
+      return;
+    }
+    resetForgotState();
     setForgotEmail(email.trim());
-    setForgotEmailSent(false);
     setForgotModalVisible(true);
   };
 
   const closeForgotModal = () => {
+    if (forgotSubmitting) return;
     Keyboard.dismiss();
     setForgotModalVisible(false);
-    setForgotEmailSent(false);
+    resetForgotState();
   };
 
-  const handleForgotSendPress = () => {
-    setForgotEmailSent(true);
+  const handleForgotSendOtp = async () => {
+    if (forgotSubmitting) return;
+
+    if (!companySlug) {
+      setValidationAlert({
+        title: 'Company required',
+        message: 'Select your organization before resetting your password.',
+      });
+      return;
+    }
+
+    const trimmed = forgotEmail.trim();
+    if (trimmed === '') {
+      setValidationAlert({
+        title: 'Email required',
+        message: 'Enter the email address for your account.',
+      });
+      return;
+    }
+
+    Keyboard.dismiss();
+    setForgotSubmitting(true);
+    try {
+      const result = await requestPasswordResetOtp({
+        companySlug,
+        email: trimmed,
+      });
+      if (!result.ok) {
+        setValidationAlert({
+          title: 'Could not send code',
+          message: __DEV__ ? `${result.message}\n\nAPI: ${API_BASE_URL}` : result.message,
+        });
+        return;
+      }
+      setEmail(trimmed);
+      setForgotOtp('');
+      setForgotStep('otp');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setValidationAlert({
+        title: 'Could not send code',
+        message: __DEV__ ? `${msg}\n\nAPI: ${API_BASE_URL}` : 'Something went wrong. Please try again.',
+      });
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleForgotVerifyOtp = async () => {
+    if (forgotSubmitting || !companySlug) return;
+
+    const code = forgotOtp.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setValidationAlert({
+        title: 'Code required',
+        message: 'Enter the 6-digit verification code from your email.',
+      });
+      return;
+    }
+
+    Keyboard.dismiss();
+    setForgotSubmitting(true);
+    try {
+      const result = await verifyPasswordResetOtp({
+        companySlug,
+        email: forgotEmail.trim(),
+        otp: code,
+      });
+      if (!result.ok) {
+        setValidationAlert({
+          title: 'Verification failed',
+          message: result.message,
+        });
+        return;
+      }
+      setForgotResetToken(result.resetToken);
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotStep('password');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setValidationAlert({
+        title: 'Verification failed',
+        message: __DEV__ ? msg : 'Something went wrong. Please try again.',
+      });
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleForgotResetPassword = async () => {
+    if (forgotSubmitting || !companySlug || !forgotResetToken) return;
+
+    const criteriaError = validateNewPassword(forgotNewPassword, forgotConfirmPassword);
+    if (criteriaError) {
+      setValidationAlert({
+        title: 'Check your password',
+        message: criteriaError,
+      });
+      return;
+    }
+
+    Keyboard.dismiss();
+    setForgotSubmitting(true);
+    try {
+      const result = await resetPasswordWithToken({
+        companySlug,
+        resetToken: forgotResetToken,
+        password: forgotNewPassword,
+        passwordConfirmation: forgotConfirmPassword,
+      });
+      if (!result.ok) {
+        setValidationAlert({
+          title: 'Could not update password',
+          message: result.message,
+        });
+        return;
+      }
+      setPassword('');
+      setForgotStep('done');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setValidationAlert({
+        title: 'Could not update password',
+        message: __DEV__ ? msg : 'Something went wrong. Please try again.',
+      });
+    } finally {
+      setForgotSubmitting(false);
+    }
   };
 
   const goToMainApp = useCallback(() => {
@@ -387,20 +551,26 @@ export function LoginScreen() {
                 style={styles.forgotModalCloseBtn}
                 hitSlop={12}
                 accessibilityLabel="Close"
+                disabled={forgotSubmitting}
               >
                 <Feather name="x" size={24} color={colors.text.secondary} />
               </TouchableOpacity>
             </View>
 
-            {!forgotEmailSent ? (
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+            {forgotStep === 'email' ? (
               <>
                 <View style={styles.forgotModalIconWrap}>
                   <Feather name="mail" size={28} color={colors.primary} />
                 </View>
                 <Text style={styles.forgotModalTitle}>Forgot your password?</Text>
                 <Text style={styles.forgotModalBody}>
-                  If you have forgotten your password, we will send an automated email to your address with a temporary
-                  password. Use it to sign in, then choose a new password.
+                  Enter your email and we will send a 6-digit verification code. After you verify it, you can create a
+                  new password.
                 </Text>
                 <Text style={[styles.label, { marginTop: spacing.md }]}>EMAIL ADDRESS</Text>
                 <Pressable style={styles.input} onPress={() => forgotEmailRef.current?.focus()}>
@@ -415,39 +585,203 @@ export function LoginScreen() {
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
+                    editable={!forgotSubmitting}
                     returnKeyType="send"
-                    onSubmitEditing={handleForgotSendPress}
+                    onSubmitEditing={() => {
+                      void handleForgotSendOtp();
+                    }}
                   />
                 </Pressable>
                 <TouchableOpacity
-                  style={[styles.signInBtn, { marginTop: spacing.xl }]}
+                  style={[styles.signInBtn, { marginTop: spacing.xl }, forgotSubmitting && { opacity: 0.7 }]}
                   activeOpacity={0.88}
-                  onPress={handleForgotSendPress}
+                  disabled={forgotSubmitting}
+                  onPress={() => {
+                    void handleForgotSendOtp();
+                  }}
                 >
-                  <Text style={styles.signInText}>Send reset email</Text>
+                  {forgotSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.signInText}>Send verification code</Text>
+                  )}
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.forgotModalBtnSecondary} onPress={closeForgotModal} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.forgotModalBtnSecondary}
+                  onPress={closeForgotModal}
+                  activeOpacity={0.7}
+                  disabled={forgotSubmitting}
+                >
                   <Text style={styles.forgotModalBtnSecondaryText}>Back to sign in</Text>
                 </TouchableOpacity>
               </>
-            ) : (
+            ) : null}
+
+            {forgotStep === 'otp' ? (
+              <>
+                <View style={styles.forgotModalIconWrap}>
+                  <Feather name="shield" size={28} color={colors.primary} />
+                </View>
+                <Text style={styles.forgotModalTitle}>Enter verification code</Text>
+                <Text style={styles.forgotModalBody}>
+                  We sent a 6-digit code to {forgotEmail.trim()}. Enter it below to continue.
+                </Text>
+                <Text style={[styles.label, { marginTop: spacing.md }]}>VERIFICATION CODE</Text>
+                <Pressable style={styles.input} onPress={() => forgotOtpRef.current?.focus()}>
+                  <Feather name="hash" size={20} color="#9CA3AF" style={styles.inputIcon} />
+                  <TextInput
+                    ref={forgotOtpRef}
+                    style={styles.inputField}
+                    placeholder="123456"
+                    placeholderTextColor="#9CA3AF"
+                    value={forgotOtp}
+                    onChangeText={(t) => setForgotOtp(t.replace(/[^0-9]/g, '').slice(0, 6))}
+                    keyboardType="number-pad"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={6}
+                    editable={!forgotSubmitting}
+                    returnKeyType="done"
+                    onSubmitEditing={() => {
+                      void handleForgotVerifyOtp();
+                    }}
+                  />
+                </Pressable>
+                <TouchableOpacity
+                  style={[styles.signInBtn, { marginTop: spacing.xl }, forgotSubmitting && { opacity: 0.7 }]}
+                  activeOpacity={0.88}
+                  disabled={forgotSubmitting}
+                  onPress={() => {
+                    void handleForgotVerifyOtp();
+                  }}
+                >
+                  {forgotSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.signInText}>Verify code</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.forgotModalBtnSecondary}
+                  onPress={() => {
+                    if (!forgotSubmitting) {
+                      void handleForgotSendOtp();
+                    }
+                  }}
+                  activeOpacity={0.7}
+                  disabled={forgotSubmitting}
+                >
+                  <Text style={styles.forgotModalBtnSecondaryText}>Resend code</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.forgotModalBtnSecondary}
+                  onPress={() => {
+                    if (!forgotSubmitting) setForgotStep('email');
+                  }}
+                  activeOpacity={0.7}
+                  disabled={forgotSubmitting}
+                >
+                  <Text style={styles.forgotModalBtnSecondaryText}>Change email</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {forgotStep === 'password' ? (
+              <>
+                <View style={styles.forgotModalIconWrap}>
+                  <Feather name="lock" size={28} color={colors.primary} />
+                </View>
+                <Text style={styles.forgotModalTitle}>Create a new password</Text>
+                <Text style={styles.forgotModalBody}>
+                  Choose a new password (at least 8 characters), then confirm it to finish.
+                </Text>
+                <Text style={[styles.label, { marginTop: spacing.md }]}>NEW PASSWORD</Text>
+                <Pressable style={styles.input} onPress={() => forgotNewPasswordRef.current?.focus()}>
+                  <Feather name="lock" size={20} color="#9CA3AF" style={styles.inputIcon} />
+                  <TextInput
+                    ref={forgotNewPasswordRef}
+                    style={[styles.inputField, styles.inputFieldPw]}
+                    placeholder="New password"
+                    placeholderTextColor="#9CA3AF"
+                    value={forgotNewPassword}
+                    onChangeText={setForgotNewPassword}
+                    secureTextEntry={!forgotShowPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!forgotSubmitting}
+                    returnKeyType="next"
+                    onSubmitEditing={() => forgotConfirmPasswordRef.current?.focus()}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeBtn}
+                    onPress={() => setForgotShowPassword((v) => !v)}
+                    hitSlop={8}
+                    accessibilityLabel={forgotShowPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Feather name={forgotShowPassword ? 'eye-off' : 'eye'} size={20} color="#9CA3AF" />
+                  </TouchableOpacity>
+                </Pressable>
+                <Text style={[styles.label, { marginTop: spacing.xl }]}>CONFIRM PASSWORD</Text>
+                <Pressable style={styles.input} onPress={() => forgotConfirmPasswordRef.current?.focus()}>
+                  <Feather name="lock" size={20} color="#9CA3AF" style={styles.inputIcon} />
+                  <TextInput
+                    ref={forgotConfirmPasswordRef}
+                    style={[styles.inputField, styles.inputFieldPw]}
+                    placeholder="Confirm password"
+                    placeholderTextColor="#9CA3AF"
+                    value={forgotConfirmPassword}
+                    onChangeText={setForgotConfirmPassword}
+                    secureTextEntry={!forgotShowConfirmPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!forgotSubmitting}
+                    returnKeyType="done"
+                    onSubmitEditing={() => {
+                      void handleForgotResetPassword();
+                    }}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeBtn}
+                    onPress={() => setForgotShowConfirmPassword((v) => !v)}
+                    hitSlop={8}
+                    accessibilityLabel={forgotShowConfirmPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Feather name={forgotShowConfirmPassword ? 'eye-off' : 'eye'} size={20} color="#9CA3AF" />
+                  </TouchableOpacity>
+                </Pressable>
+                <Text style={styles.forgotModalHint}>Must be at least 8 characters and match the confirmation.</Text>
+                <TouchableOpacity
+                  style={[styles.signInBtn, { marginTop: spacing.md }, forgotSubmitting && { opacity: 0.7 }]}
+                  activeOpacity={0.88}
+                  disabled={forgotSubmitting}
+                  onPress={() => {
+                    void handleForgotResetPassword();
+                  }}
+                >
+                  {forgotSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.signInText}>Update password</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {forgotStep === 'done' ? (
               <>
                 <View style={styles.forgotModalSuccessIcon}>
-                  <Feather name="check" size={36} color="#059669" strokeWidth={2.5} />
+                  <Feather name="check" size={36} color="#059669" />
                 </View>
-                <Text style={styles.forgotModalTitle}>Check your email</Text>
+                <Text style={styles.forgotModalTitle}>Password updated</Text>
                 <Text style={styles.forgotModalBody}>
-                  We have sent an email to your inbox with a temporary password. Follow the instructions in the message
-                  to sign in and update your password.
-                </Text>
-                <Text style={styles.forgotModalHint}>
-                  Did not receive it? Check your spam folder or try again in a few minutes.
+                  Your password has been changed. Sign in with your email and new password.
                 </Text>
                 <TouchableOpacity style={styles.signInBtn} activeOpacity={0.88} onPress={closeForgotModal}>
                   <Text style={styles.signInText}>Back to sign in</Text>
                 </TouchableOpacity>
               </>
-            )}
+            ) : null}
+            </ScrollView>
           </View>
         </View>
       </Modal>
