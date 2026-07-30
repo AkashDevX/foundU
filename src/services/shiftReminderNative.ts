@@ -25,6 +25,7 @@ type ShiftReminderNativeModule = {
     body: string,
     notificationId: number,
     expiresAtMs: number,
+    thresholdMin: number,
   ) => Promise<void>;
   scheduleReminders: (reminders: ShiftReminderScheduleItem[]) => Promise<number>;
   cancelReminders: (notificationIds: number[]) => Promise<void>;
@@ -44,6 +45,7 @@ export async function showShiftReminderNotification(
   body: string,
   notificationId: number = SHIFT_REMINDER_ACTIVE_NOTIFICATION_ID,
   expiresAtMs: number,
+  thresholdMin: number = 0,
 ): Promise<{ ok: boolean; reason?: string }> {
   if (!isShiftReminderNativeLinked() || !nativeModule) {
     return {
@@ -61,7 +63,7 @@ export async function showShiftReminderNotification(
         reason: 'Notifications are disabled for CruLynk. Enable them in system settings.',
       };
     }
-    await nativeModule.showNow(title, body, notificationId, expiresAtMs);
+    await nativeModule.showNow(title, body, notificationId, expiresAtMs, thresholdMin);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

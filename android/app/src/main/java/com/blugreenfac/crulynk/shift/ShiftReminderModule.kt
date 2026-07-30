@@ -78,13 +78,18 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
     body: String,
     notificationId: Int,
     expiresAtMs: Double,
+    thresholdMin: Int,
     promise: Promise,
   ) {
     try {
       val safeTitle = title.trim().ifEmpty { "Shift coming soon" }
       val safeBody = body.trim().ifEmpty { "Your assigned shift is almost here." }
-      val expireAt = expiresAtMs.toLong().takeIf { it > System.currentTimeMillis() }
-        ?: (System.currentTimeMillis() + 60_000L)
+      val expireAt = expiresAtMs.toLong()
+      if (!ShiftReminderScheduler.isReminderPopupWindowOpen(expireAt)) {
+        ShiftReminderScheduler.cancelScheduled(context, clearNotification = true)
+        promise.resolve(null)
+        return
+      }
 
       Handler(Looper.getMainLooper()).post {
         ShiftReminderNotifier.post(
@@ -97,6 +102,7 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
             notificationId
           },
           expiresAtMs = expireAt,
+          thresholdMin = thresholdMin,
         )
       }
 
@@ -123,9 +129,9 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
           ?: inferThreshold(triggerAtMs, expiresAtMs)
         if (title.isEmpty() || body.isEmpty()) continue
         if (expiresAtMs > 0L && expiresAtMs <= now) continue
-        // Allow near-term triggers so background delivery still works after swipe-away.
-        val safeTrigger = if (triggerAtMs <= now + 2_000L) now + 5_000L else triggerAtMs
-        if (safeTrigger >= expiresAtMs && expiresAtMs > 0L) continue
+        // Skip already-due triggers. Exclusive JS windows schedule only future moments.
+        if (triggerAtMs <= now + 2_000L) continue
+        if (triggerAtMs >= expiresAtMs && expiresAtMs > 0L) continue
 
         parsed.add(
           ShiftReminderScheduler.Reminder(
@@ -133,7 +139,7 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
             title = title,
             body = body,
             alertMessage = alertMessage.ifEmpty { body },
-            triggerAtMs = safeTrigger,
+            triggerAtMs = triggerAtMs,
             expiresAtMs = expiresAtMs,
             alarmRequestCode = ShiftReminderScheduler.alarmRequestCodeForThreshold(thresholdMin),
           ),
@@ -221,16 +227,6 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
       promise.resolve(false)
     } catch (error: Exception) {
       promise.reject("SHIFT_REMINDER_BATTERY_OPT_FAILED", error.message, error)
-    }
-  }
-
-  @ReactMethod
-  fun armTestReminder(delaySeconds: Int, promise: Promise) {
-    try {
-      ShiftReminderScheduler.armTestReminder(context, delaySeconds)
-      promise.resolve(delaySeconds)
-    } catch (error: Exception) {
-      promise.reject("SHIFT_REMINDER_ARM_TEST_FAILED", error.message, error)
     }
   }
 

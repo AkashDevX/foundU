@@ -15,7 +15,7 @@ import com.blugreenfac.crulynk.MainActivity
 import com.blugreenfac.crulynk.R
 
 internal object ShiftReminderNotifier {
-    const val CHANNEL_ID = "com.blugreenfac.crulynk.shift_reminders_v5"
+  const val CHANNEL_ID = "com.blugreenfac.crulynk.shift_reminders_v5"
   const val ACTIVE_NOTIFICATION_ID = 2200
 
   fun ensureChannel(context: Context) {
@@ -45,7 +45,7 @@ internal object ShiftReminderNotifier {
   }
 
   /**
-   * @return true when the OS accepted the notification (app notifications enabled).
+   * @return true when the OS accepted a new notification post.
    */
   fun post(
     context: Context,
@@ -54,7 +54,20 @@ internal object ShiftReminderNotifier {
     notificationId: Int,
     expiresAtMs: Long,
     alertMessage: String? = null,
+    thresholdMin: Int = 0,
   ): Boolean {
+    // After shift start, or under 15 minutes remaining: never popup again.
+    if (!ShiftReminderScheduler.isReminderPopupWindowOpen(expiresAtMs)) {
+      cancelAllActive(context)
+      clearPendingAlert(context)
+      return false
+    }
+
+    // Each threshold may alert at most once (blocks AlarmClock + backup + watchdog spam).
+    if (thresholdMin > 0 && hasDeliveredThreshold(context, thresholdMin)) {
+      return true
+    }
+
     ensureChannel(context)
 
     val openAppIntent = PendingIntent.getActivity(
@@ -64,10 +77,7 @@ internal object ShiftReminderNotifier {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
           Intent.FLAG_ACTIVITY_SINGLE_TOP or
           Intent.FLAG_ACTIVITY_CLEAR_TOP
-        putExtra(MainActivity.EXTRA_SHIFT_REMINDER_TITLE, title)
-        putExtra(MainActivity.EXTRA_SHIFT_REMINDER_MESSAGE, alertMessage ?: body)
-        putExtra(MainActivity.EXTRA_SHIFT_REMINDER_BODY, body)
-        putExtra(MainActivity.EXTRA_SHIFT_REMINDER_EXPIRES_AT_MS, expiresAtMs)
+        // Open app only — do not re-trigger reminder extras after shift window closes.
       },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
@@ -75,7 +85,9 @@ internal object ShiftReminderNotifier {
     val appName = context.getString(R.string.app_name)
     val largeIcon = BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
     val brandColor = ContextCompat.getColor(context, R.color.crulynk_navy)
-    val timeoutMs = (expiresAtMs - System.currentTimeMillis()).coerceAtLeast(5_000L)
+    // Keep tray at most until the under-15 silence window (or shift start, whichever first).
+    val silenceAtMs = ShiftReminderScheduler.popupSilenceAtMs(expiresAtMs)
+    val timeoutMs = (silenceAtMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
 
     val builder = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_shift_reminder)
@@ -90,10 +102,8 @@ internal object ShiftReminderNotifier {
           .setSummaryText(appName),
       )
       .setContentIntent(openAppIntent)
-      // High-importance heads-up popup in the shade. Keep until shift start (timeoutAfter),
-      // but do not use ongoing — Samsung suppresses heads-up for ongoing notifications.
-      .setAutoCancel(false)
-      .setOnlyAlertOnce(false)
+      .setAutoCancel(true)
+      .setOnlyAlertOnce(true)
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -123,6 +133,9 @@ internal object ShiftReminderNotifier {
     if (enabled) {
       editor.putBoolean(ShiftReminderReceiver.firedKey(notificationId), true)
     }
+    if (thresholdMin > 0) {
+      editor.putBoolean(deliveredThresholdKey(thresholdMin), true)
+    }
     editor.apply()
 
     return enabled
@@ -135,6 +148,7 @@ internal object ShiftReminderNotifier {
 
   fun cancelAllActive(context: Context) {
     cancel(context, ACTIVE_NOTIFICATION_ID)
+    clearPendingAlert(context)
   }
 
   fun clearDeliveryFlags(context: Context) {
@@ -143,4 +157,20 @@ internal object ShiftReminderNotifier {
       .clear()
       .apply()
   }
+
+  fun clearPendingAlert(context: Context) {
+    context.getSharedPreferences(ShiftReminderReceiver.PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .remove(ShiftReminderReceiver.KEY_PENDING_TITLE)
+      .remove(ShiftReminderReceiver.KEY_PENDING_MESSAGE)
+      .apply()
+  }
+
+  fun hasDeliveredThreshold(context: Context, thresholdMin: Int): Boolean {
+    if (thresholdMin <= 0) return false
+    return context.getSharedPreferences(ShiftReminderReceiver.PREFS, Context.MODE_PRIVATE)
+      .getBoolean(deliveredThresholdKey(thresholdMin), false)
+  }
+
+  fun deliveredThresholdKey(thresholdMin: Int): String = "delivered_threshold_$thresholdMin"
 }
