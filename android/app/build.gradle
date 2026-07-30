@@ -85,8 +85,8 @@ android {
         applicationId "com.blugreenfac.crulynk"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 3
+        versionName "3.0"
         // Required by AndroidManifest `${usesCleartextTraffic}` — allows http:// to dev PC (emulator → Laravel).
         manifestPlaceholders = [usesCleartextTraffic: "true"]
         externalNativeBuild {
