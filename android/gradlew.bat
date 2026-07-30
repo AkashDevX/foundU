@@ -31,6 +31,12 @@
 @rem Set local scope for the variables with windows NT shell
 if "%OS%"=="Windows_NT" setlocal
 
+@rem IDE sandboxes can redirect GRADLE_USER_HOME under Temp and exceed Windows MAX_PATH.
+if not "%GRADLE_USER_HOME%"=="" (
+  echo %GRADLE_USER_HOME% | findstr /i /c:"cursor-sandbox" >nul
+  if not errorlevel 1 set "GRADLE_USER_HOME=%USERPROFILE%\.gradle"
+)
+
 set DIRNAME=%~dp0
 if "%DIRNAME%"=="" set DIRNAME=.
 @rem This is normally unused
