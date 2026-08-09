@@ -28,7 +28,7 @@ export const PRODUCTION_API_BASE_URL = 'https://brittoassetholdings.org';
  * When `true`, Metro/debug builds also call the live server (`PRODUCTION_API_BASE_URL`).
  * Set to `false` to use local Laravel (`DEV_API_BASE_URL`) while developing.
  */
-export const USE_LIVE_API_IN_DEBUG = true;
+export const USE_LIVE_API_IN_DEBUG = false;
 
 /**
  * PC LAN IP for a **physical** phone on the same Wi‑Fi (e.g. `192.168.1.42`).

@@ -17,6 +17,7 @@ import { colors, fontFamily } from '../theme/theme';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { ShiftsScreen } from '../screens/ShiftsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
+import { TrainingScreen } from '../screens/TrainingScreen';
 import { ChatScreen } from '../screens/ChatScreen';
 import { FLOATING_TAB_BAR_BOTTOM_INSET } from './floatingTabBarMetrics';
 import { runWhenIdle } from '../utils/runWhenIdle';
@@ -30,6 +31,7 @@ const TABS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home', screen: DashboardScreen },
   { key: 'shifts', label: 'Shifts', icon: 'calendar', screen: ShiftsScreen },
   { key: 'tasks', label: 'Tasks', icon: 'check-square', screen: TasksScreen },
+  { key: 'training', label: 'Train', icon: 'book-open', screen: TrainingScreen },
   { key: 'chat', label: 'Chat', icon: 'message-circle', screen: ChatScreen },
 ] as const;
 
