@@ -14,6 +14,8 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -29,15 +31,24 @@ import { API_BASE_URL } from '../../config/api';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
 import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
+import { subscribeAssignmentChange } from '../../services/assignmentEvents';
 import { getSessionAuthenticated } from '../../services/authSessionStorage';
-import { requestForegroundLocationPermission } from '../../services/locationPermissions';
+import {
+  hasAndroidForegroundOnly,
+  hasWorkLocationPermission,
+  requestWorkLocationPermission,
+  resetWorkLocationPermissionGate,
+  WORK_LOCATION_DENIED_MESSAGE,
+} from '../../services/locationPermissions';
 import {
   fetchTimeClockStatus,
+  postAutoClockOut,
   postBreakIn,
   postBreakOut,
   postClockIn,
   postClockOut,
   resolveGeofenceRadiusM,
+  resolveGeofenceSiteCoords,
   type TimeClockStatus,
 } from '../../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
@@ -45,6 +56,7 @@ import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
 import {
   DEFAULT_GEOFENCE_RADIUS_M,
   formatZoneBadgeLabel,
+  GEOFENCE_POLL_INTERVAL_MS,
   haversineDistanceM,
   isInsideGeofence,
 } from '../../utils/geofence';
@@ -93,10 +105,6 @@ function openMapsAt(lat: number, lng: number): void {
     const q = `${lat},${lng}`;
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`);
   });
-}
-
-async function requestLocationPermission(): Promise<boolean> {
-  return requestForegroundLocationPermission();
 }
 
 function readCurrentPosition(): Promise<{ lat: number; lng: number; accuracyMeters: number | null }> {
@@ -206,6 +214,12 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   const [locationLoading, setLocationLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  /** Clock-in is blocked until Allow all the time (background) is granted. */
+  const [workLocationReady, setWorkLocationReady] = useState(false);
+  const workPermissionPromptInFlight = useRef(false);
+  const didInitialLocationPromptRef = useRef(false);
+  const autoClockOutInFlightRef = useRef(false);
+  const autoClockOutAttemptedSiteRef = useRef<string | null>(null);
   const [mapPreview, setMapPreview] = useState<MapPreviewResult | null>(null);
   const [mapPreviewLoading, setMapPreviewLoading] = useState(false);
   const mapLoadSeq = useRef(0);
@@ -261,20 +275,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   );
 
   const geofenceSiteCoords = useMemo(() => {
-    const session = timeClockStatus?.open_session;
-    const lat = session?.geofence_latitude;
-    const lng = session?.geofence_longitude;
-    if (
-      isClockedIn &&
-      typeof lat === 'number' &&
-      typeof lng === 'number' &&
-      Number.isFinite(lat) &&
-      Number.isFinite(lng)
-    ) {
-      return { lat, lng };
-    }
-    return assignedCoords;
-  }, [assignedCoords, isClockedIn, timeClockStatus?.open_session]);
+    return resolveGeofenceSiteCoords(
+      assignedCoords,
+      timeClockStatus?.open_session,
+    );
+  }, [assignedCoords, timeClockStatus?.open_session]);
 
   const mapTargetCoords = geofenceSiteCoords ?? userCoords;
   const mapTargetAddress = assignmentProfile?.assignedWorkLocationAddress ?? locationAddress;
@@ -308,23 +313,159 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     );
   }, [distanceToSiteM, geofenceRadiusM, userCoords?.accuracyMeters]);
 
-  const openAppSettings = useCallback(() => {
-    Linking.openSettings();
+  const siteLat = geofenceSiteCoords?.lat ?? null;
+  const siteLng = geofenceSiteCoords?.lng ?? null;
+  const userLat = userCoords?.lat ?? null;
+  const userLng = userCoords?.lng ?? null;
+
+  // When Out of range while clocked in, auto clock-out once per site.
+  // Primitive lat/lng deps so the assignment poll cannot cancel the request.
+  useEffect(() => {
+    if (!isClockedIn) {
+      autoClockOutAttemptedSiteRef.current = null;
+      return;
+    }
+    if (isInZone !== false) return;
+    if (userLat == null || userLng == null || siteLat == null || siteLng == null) return;
+    if (punchBusy) return;
+
+    const siteKey = `${siteLat.toFixed(5)},${siteLng.toFixed(5)}`;
+    if (autoClockOutAttemptedSiteRef.current === siteKey) return;
+    if (autoClockOutInFlightRef.current) return;
+
+    autoClockOutAttemptedSiteRef.current = siteKey;
+    autoClockOutInFlightRef.current = true;
+    const lat = userLat;
+    const lng = userLng;
+    const accuracy = userCoords?.accuracyMeters ?? null;
+
+    void (async () => {
+      try {
+        const result = await postAutoClockOut({
+          latitude: lat,
+          longitude: lng,
+          accuracy_meters: accuracy,
+        });
+
+        if (!result.ok) {
+          // Allow another attempt on the next poll / location update.
+          autoClockOutAttemptedSiteRef.current = null;
+          if (result.code === 'not_clocked_in') {
+            setIsClockedIn(false);
+            return;
+          }
+          showClockAlert(
+            'Auto clock-out failed',
+            result.message || 'Could not end your shift automatically. Please clock out manually.',
+            'error',
+          );
+          return;
+        }
+
+        setTimeClockStatus(result.time_clock);
+        setIsClockedIn(false);
+        setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
+        notifyTimeClockChange({
+          timeClock: result.time_clock,
+          message: result.message,
+          source: 'auto_geofence_exit',
+        });
+        showClockAlert(
+          'Automatically clocked out',
+          result.message ||
+            'You left your assigned work site. Your shift was ended automatically.',
+          'warning',
+        );
+      } catch (err: unknown) {
+        autoClockOutAttemptedSiteRef.current = null;
+        const message = err instanceof Error ? err.message : 'Auto clock-out failed.';
+        showClockAlert('Auto clock-out failed', message, 'error');
+      } finally {
+        autoClockOutInFlightRef.current = false;
+      }
+    })();
+  }, [
+    isClockedIn,
+    isInZone,
+    punchBusy,
+    showClockAlert,
+    siteLat,
+    siteLng,
+    userCoords?.accuracyMeters,
+    userLat,
+    userLng,
+  ]);
+
+  const markWorkLocationDenied = useCallback(() => {
+    setWorkLocationReady(false);
+    setLocationError('permission_denied');
+    setUserCoords(null);
+    setLocationAddress(null);
+    setLocationLoading(false);
   }, []);
+
+  const ensureWorkLocationAccess = useCallback(
+    async (opts?: { forcePrompt?: boolean }): Promise<boolean> => {
+      const already = await hasWorkLocationPermission();
+      if (already) {
+        setWorkLocationReady(true);
+        setLocationError(null);
+        return true;
+      }
+
+      setWorkLocationReady(false);
+
+      // Passive checks (refresh / AppState) must never open disclosure or system UI.
+      if (!opts?.forcePrompt) {
+        return false;
+      }
+
+      if (workPermissionPromptInFlight.current) {
+        resetWorkLocationPermissionGate();
+        workPermissionPromptInFlight.current = false;
+      }
+
+      workPermissionPromptInFlight.current = true;
+      try {
+        // First-time / forced prompt uses the same rules as Enable location.
+        const foregroundReady = await hasAndroidForegroundOnly();
+        const result = await requestWorkLocationPermission(
+          foregroundReady ? { backgroundOnly: true } : undefined,
+        );
+        if (result === 'granted') {
+          setWorkLocationReady(true);
+          setLocationError(null);
+          return true;
+        }
+        markWorkLocationDenied();
+        return false;
+      } finally {
+        workPermissionPromptInFlight.current = false;
+        resetWorkLocationPermissionGate();
+      }
+    },
+    [markWorkLocationDenied],
+  );
 
   const refreshDeviceLocation = useCallback(
     async (opts?: {
-      /** When false, caller owns loading state (e.g. combined profile + GPS refresh). */
       manageLoading?: boolean;
+      forcePermissionPrompt?: boolean;
     }) => {
       const manageLoading = opts?.manageLoading !== false;
+      const forcePrompt = opts?.forcePermissionPrompt === true;
+
       if (manageLoading) {
         setLocationLoading(true);
-        setLocationError(null);
+        // Don't wipe a permission_denied error unless we're about to re-prompt.
+        if (forcePrompt || locationError !== 'permission_denied') {
+          setLocationError(null);
+        }
       }
       try {
-        const granted = await requestLocationPermission();
-        if (!granted) {
+        const ready = await ensureWorkLocationAccess({ forcePrompt });
+        if (!ready) {
+          setWorkLocationReady(false);
           setLocationError('permission_denied');
           setUserCoords(null);
           setLocationAddress(null);
@@ -339,6 +480,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         });
         const address = await reverseGeocode(position.lat, position.lng);
         setLocationAddress(address);
+        setLocationError(null);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Location failed';
         setLocationError(message);
@@ -350,8 +492,72 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         }
       }
     },
-    [],
+    [ensureWorkLocationAccess, locationError],
   );
+
+  const requestWorkLocationForAction = useCallback(async (): Promise<boolean> => {
+    if (await hasWorkLocationPermission()) {
+      setWorkLocationReady(true);
+      setLocationError(null);
+      return true;
+    }
+
+    // Always allow Enable location / clock-in to start a fresh attempt.
+    resetWorkLocationPermissionGate();
+    workPermissionPromptInFlight.current = false;
+
+    workPermissionPromptInFlight.current = true;
+    try {
+      const foregroundReady = await hasAndroidForegroundOnly();
+      const result = await requestWorkLocationPermission(
+        foregroundReady ? { backgroundOnly: true } : undefined,
+      );
+      if (result === 'granted') {
+        setWorkLocationReady(true);
+        setLocationError(null);
+        return true;
+      }
+      markWorkLocationDenied();
+      return false;
+    } finally {
+      workPermissionPromptInFlight.current = false;
+      resetWorkLocationPermissionGate();
+    }
+  }, [markWorkLocationDenied]);
+
+  /** Enable location: every tap starts a fresh Allow-all-the-time attempt. */
+  const retryLocationPermission = useCallback(() => {
+    void (async () => {
+      // Always clear stuck gates before a user-initiated retry.
+      resetWorkLocationPermissionGate();
+      workPermissionPromptInFlight.current = false;
+      setLocationLoading(true);
+      setLocationError('permission_denied');
+
+      const ready = await requestWorkLocationForAction();
+      if (!ready) {
+        setLocationLoading(false);
+        setLocationError('permission_denied');
+        return;
+      }
+      try {
+        const position = await readCurrentPosition();
+        setUserCoords({
+          lat: position.lat,
+          lng: position.lng,
+          accuracyMeters: position.accuracyMeters,
+        });
+        const address = await reverseGeocode(position.lat, position.lng);
+        setLocationAddress(address);
+        setLocationError(null);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Location failed';
+        setLocationError(message);
+      } finally {
+        setLocationLoading(false);
+      }
+    })();
+  }, [requestWorkLocationForAction]);
 
   const refreshDashboardData = useCallback(
     async (opts?: { pullToRefresh?: boolean }) => {
@@ -364,7 +570,10 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       } else {
         setLocationLoading(true);
       }
-      setLocationError(null);
+      // Never clear permission_denied on refresh — that was re-triggering a broken prompt flow.
+      if (locationError !== 'permission_denied') {
+        setLocationError(null);
+      }
 
       try {
         const signedIn = await getSessionAuthenticated();
@@ -412,7 +621,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         }
       }
     },
-    [locationLoading, refreshDeviceLocation, refreshing, showConnectivityAlert],
+    [locationError, locationLoading, refreshDeviceLocation, refreshing, showConnectivityAlert],
   );
 
   const handleUpdateLocation = useCallback(() => {
@@ -425,8 +634,29 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
 
   useEffect(() => {
     if (!isTabActive) return;
-    void refreshDeviceLocation();
+    // One automatic prompt per Dashboard visit / fresh session.
+    if (didInitialLocationPromptRef.current) return;
+    didInitialLocationPromptRef.current = true;
+    void refreshDeviceLocation({ forcePermissionPrompt: true });
   }, [isTabActive, refreshDeviceLocation]);
+
+  // Returning from Android Allow all the time screen — unlock if granted.
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state !== 'active') return;
+      void (async () => {
+        if (await hasWorkLocationPermission()) {
+          setWorkLocationReady(true);
+          setLocationError(null);
+          if (!userCoords) {
+            void refreshDeviceLocation({ forcePermissionPrompt: false });
+          }
+        }
+      })();
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, [refreshDeviceLocation, userCoords]);
 
   useEffect(() => {
     if (!isTabActive) return;
@@ -476,6 +706,64 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     });
   }, []);
 
+  // Keep assigned work location / zone badge live when admin reassigns mid-shift.
+  useEffect(() => {
+    return subscribeAssignmentChange((event) => {
+      setAssignmentProfile(event.profile);
+      setWelcomeName(welcomeDisplayName(event.profile));
+    });
+  }, []);
+
+  // While clocked in on Dashboard, poll /me + time-clock so reassignment shows
+  // Out of range and the monitor can auto clock-out without pull-to-refresh.
+  useEffect(() => {
+    if (!isTabActive || !isClockedIn) return undefined;
+
+    let cancelled = false;
+    const syncAssignment = async () => {
+      try {
+        const api = await refreshAndCacheAccountProfileFromApi();
+        if (cancelled || !api.ok) return;
+        setAssignmentProfile((prev) => {
+          const next = api.profile;
+          if (
+            prev &&
+            prev.assignedWorkLocationLat === next.assignedWorkLocationLat &&
+            prev.assignedWorkLocationLng === next.assignedWorkLocationLng &&
+            prev.assignedWorkLocationName === next.assignedWorkLocationName &&
+            prev.assignedWorkLocationAddress === next.assignedWorkLocationAddress
+          ) {
+            return prev;
+          }
+          return next;
+        });
+        setWelcomeName(welcomeDisplayName(api.profile));
+
+        const clock = await fetchTimeClockStatus();
+        if (cancelled || !clock.ok) return;
+        setTimeClockStatus(clock.time_clock);
+        setIsClockedIn(clock.time_clock.is_clocked_in);
+        setGeofenceRadiusM(resolveGeofenceRadiusM(clock.time_clock));
+        notifyTimeClockChange({
+          timeClock: clock.time_clock,
+          source: 'refresh',
+        });
+      } catch {
+        /* ignore transient sync failures */
+      }
+    };
+
+    void syncAssignment();
+    const timer = setInterval(() => {
+      void syncAssignment();
+    }, GEOFENCE_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isTabActive, isClockedIn]);
+
   useEffect(() => {
     if (!isTabActive || !mapTargetCoords || locationError || locationLoading) {
       return;
@@ -508,6 +796,17 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       );
       return;
     }
+
+    // Clock-in / clock-out require Allow all the time before anything else.
+    const ready = workLocationReady
+      ? await hasWorkLocationPermission()
+      : await requestWorkLocationForAction();
+    if (!ready) {
+      setWorkLocationReady(false);
+      showClockAlert('Location required', WORK_LOCATION_DENIED_MESSAGE, 'warning');
+      return;
+    }
+    setWorkLocationReady(true);
 
     if (isClockedIn) {
       setClockOutComment('');
@@ -545,13 +844,9 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   const performClockIn = async () => {
     setClockPunching(true);
     try {
-      const granted = await requestLocationPermission();
-      if (!granted) {
-        showClockAlert(
-          'Location required',
-          'Allow location access so we can verify you are at your assigned work site.',
-          'info',
-        );
+      const ready = await requestWorkLocationForAction();
+      if (!ready) {
+        showClockAlert('Location required', WORK_LOCATION_DENIED_MESSAGE, 'warning');
         return;
       }
 
@@ -570,22 +865,22 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         accuracy_meters: position.accuracyMeters,
       };
 
-      const result = await postClockIn(coords);
-      if (!result.ok) {
-        const alert = clockInFailureAlert(result.code, result.message);
+      const clockResult = await postClockIn(coords);
+      if (!clockResult.ok) {
+        const alert = clockInFailureAlert(clockResult.code, clockResult.message);
         showClockAlert(alert.title, alert.message, alert.variant);
         return;
       }
 
-      setIsClockedIn(result.time_clock.is_clocked_in);
-      setTimeClockStatus(result.time_clock);
-      setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
+      setIsClockedIn(clockResult.time_clock.is_clocked_in);
+      setTimeClockStatus(clockResult.time_clock);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(clockResult.time_clock));
       notifyTimeClockChange({
-        timeClock: result.time_clock,
-        message: result.message,
+        timeClock: clockResult.time_clock,
+        message: clockResult.message,
         source: 'manual',
       });
-      showClockAlert('Clocked in', result.message, 'success');
+      showClockAlert('Clocked in', clockResult.message, 'success');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not read GPS location.';
       showClockAlert('Location error', message, 'error');
@@ -598,13 +893,9 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     setShowClockOutModal(false);
     setClockPunching(true);
     try {
-      const granted = await requestLocationPermission();
-      if (!granted) {
-        showClockAlert(
-          'Location required',
-          'Allow location access so we can verify you are at your assigned work site.',
-          'info',
-        );
+      const ready = await requestWorkLocationForAction();
+      if (!ready) {
+        showClockAlert('Location required', WORK_LOCATION_DENIED_MESSAGE, 'warning');
         return;
       }
 
@@ -624,22 +915,22 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       };
 
       const trimmedComment = clockOutComment.trim();
-      const result = await postClockOut(coords, trimmedComment || undefined);
-      if (!result.ok) {
-        showClockAlert('Clock out failed', result.message, 'error');
+      const clockResult = await postClockOut(coords, trimmedComment || undefined);
+      if (!clockResult.ok) {
+        showClockAlert('Clock out failed', clockResult.message, 'error');
         return;
       }
 
       setClockOutComment('');
-      setIsClockedIn(result.time_clock.is_clocked_in);
-      setTimeClockStatus(result.time_clock);
-      setGeofenceRadiusM(resolveGeofenceRadiusM(result.time_clock));
+      setIsClockedIn(clockResult.time_clock.is_clocked_in);
+      setTimeClockStatus(clockResult.time_clock);
+      setGeofenceRadiusM(resolveGeofenceRadiusM(clockResult.time_clock));
       notifyTimeClockChange({
-        timeClock: result.time_clock,
-        message: result.message,
+        timeClock: clockResult.time_clock,
+        message: clockResult.message,
         source: 'manual',
       });
-      showClockAlert('Clocked out', result.message, 'success');
+      showClockAlert('Clocked out', clockResult.message, 'success');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not read GPS location.';
       showClockAlert('Location error', message, 'error');
@@ -664,13 +955,9 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     const onBreak = timeClockStatus?.is_on_break === true;
     setBreakPunching(true);
     try {
-      const granted = await requestLocationPermission();
-      if (!granted) {
-        showClockAlert(
-          'Location required',
-          'Allow location access so we can verify you are at your assigned work site.',
-          'info',
-        );
+      const ready = await requestWorkLocationForAction();
+      if (!ready) {
+        showClockAlert('Location required', WORK_LOCATION_DENIED_MESSAGE, 'warning');
         return;
       }
 
@@ -703,7 +990,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         message: result.message,
         source: 'manual',
       });
-      showClockAlert(onBreak ? 'Break ended' : 'Break started', result.message, 'success');
+      showClockAlert(
+        onBreak ? 'Break ended' : 'Break started',
+        result.message,
+        'success',
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not read GPS location.';
       showClockAlert('Location error', message, 'error');
@@ -808,6 +1099,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
               styles.clockInBtn,
               isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut,
               !isClockedIn ? styles.clockInBtnSolo : null,
+              !workLocationReady ? { opacity: 0.45 } : null,
             ]}
             onPress={() => void handleClockPunch()}
             disabled={punchBusy}
@@ -896,16 +1188,18 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
             <View>
               <Text style={[styles.locationAddress, styles.locationErrorText]}>
                 {locationError === 'permission_denied'
-                  ? 'Location permission is required. Please enable it in Settings.'
+                  ? WORK_LOCATION_DENIED_MESSAGE
                   : locationError}
               </Text>
               {locationError === 'permission_denied' && (
                 <TouchableOpacity
                   style={styles.locationOpenSettingsBtn}
-                  onPress={openAppSettings}
+                  onPress={retryLocationPermission}
+                  accessibilityRole="button"
+                  accessibilityLabel="Review location disclosure and allow location"
                 >
-                  <Feather name="settings" size={18} color={colors.white} />
-                  <Text style={styles.locationOpenSettingsText}>Open Settings</Text>
+                  <Feather name="map-pin" size={18} color={colors.white} />
+                  <Text style={styles.locationOpenSettingsText}>Enable location</Text>
                 </TouchableOpacity>
               )}
             </View>

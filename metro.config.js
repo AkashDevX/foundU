@@ -24,11 +24,17 @@ function resolveDatetimePickerEntry() {
 
 const datetimePickerEntry = resolveDatetimePickerEntry();
 
+// Gradle rebuilds under android/.gradle; watching those paths crashes Metro on Windows
+// when a folder disappears mid-watch (ENOENT on build-attribution, etc.).
+const androidBuildBlockList =
+  /[/\\]android[/\\](?:\.gradle|build|app[/\\](?:build|\.cxx)|\$buildDir)[/\\].*/;
+
 /**
  * @type {import('@react-native/metro-config').MetroConfig}
  */
 const config = {
   resolver: {
+    blockList: androidBuildBlockList,
     resolveRequest: (context, moduleName, platform) => {
       if (moduleName === '@react-native-community/datetimepicker' && datetimePickerEntry) {
         return {
