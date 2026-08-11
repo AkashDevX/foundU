@@ -11,6 +11,7 @@ import { DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AppBootstrapProvider } from './src/context/AppBootstrapContext';
 import { AuthSessionProvider, useAuthSession } from './src/context/AuthSessionContext';
+import { LocationDisclosureProvider } from './src/context/LocationDisclosureContext';
 import { AppShell } from './src/components/AppShell';
 import { LoginScreen } from './src/screens/LoginScreen/LoginScreen';
 import { colors } from './src/theme/theme';
@@ -79,9 +80,11 @@ function App() {
       <SafeAreaProvider>
         <AppBootstrapProvider>
           <AuthSessionProvider>
-            <AppShell>
-              <NavigationRoot />
-            </AppShell>
+            <LocationDisclosureProvider>
+              <AppShell>
+                <NavigationRoot />
+              </AppShell>
+            </LocationDisclosureProvider>
           </AuthSessionProvider>
         </AppBootstrapProvider>
       </SafeAreaProvider>

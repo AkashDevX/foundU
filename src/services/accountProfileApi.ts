@@ -3,6 +3,7 @@ import { tryParseApiJson } from '../utils/parseApiJson';
 import type { UserProfileSnapshot } from '../types/userProfile';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile, saveAccountProfile } from './accountProfileStorage';
+import { notifyAssignmentChange } from './assignmentEvents';
 
 /**
  * Authenticated employee profile from the tenant DB.
@@ -347,11 +348,17 @@ export function mapMePayloadToUserProfile(
     assignment?.shift && typeof assignment.shift === 'object' && !Array.isArray(assignment.shift)
       ? (assignment.shift as Record<string, unknown>)
       : null;
+  const nestedLocationCandidate =
+    assignment?.work_location ??
+    assignment?.location ??
+    assignment?.site ??
+    row.assigned_work_location ??
+    row.work_location;
   const assignmentLocation =
-    assignment?.work_location &&
-    typeof assignment.work_location === 'object' &&
-    !Array.isArray(assignment.work_location)
-      ? (assignment.work_location as Record<string, unknown>)
+    nestedLocationCandidate &&
+    typeof nestedLocationCandidate === 'object' &&
+    !Array.isArray(nestedLocationCandidate)
+      ? (nestedLocationCandidate as Record<string, unknown>)
       : null;
   const assignedShiftsFirst = firstAssignedShiftFromRow(row);
   const shiftBreaksSource = assignmentShift ?? assignedShiftsFirst;
@@ -416,7 +423,7 @@ export function mapMePayloadToUserProfile(
       'work_location_latitude',
       'latitude',
       'assignedWorkLocationLat',
-    ) ?? pickString(assignmentLocation ?? {}, 'latitude'),
+    ) ?? pickString(assignmentLocation ?? {}, 'latitude', 'lat', 'work_location_lat'),
     assignedWorkLocationLng: pickString(
       row,
       'assigned_work_location_lng',
@@ -424,7 +431,7 @@ export function mapMePayloadToUserProfile(
       'work_location_longitude',
       'longitude',
       'assignedWorkLocationLng',
-    ) ?? pickString(assignmentLocation ?? {}, 'longitude'),
+    ) ?? pickString(assignmentLocation ?? {}, 'longitude', 'lng', 'lon', 'work_location_lng'),
     assignedDepartmentCode:
       pickString(row, 'assigned_department_code', 'department_code') ??
       pickString(assignmentDepartment ?? {}, 'code'),
@@ -568,19 +575,31 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
     const existing = await loadAccountProfile();
     const apiPhoto = result.profile.profilePhotoUrl;
     const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
+    // Don't let undefined API fields wipe previously known assignment coords/name.
     const merged: UserProfileSnapshot = {
       ...existing,
-      ...result.profile,
+      ...Object.fromEntries(
+        Object.entries(result.profile).filter(([, value]) => value !== undefined),
+      ),
       companySlug: result.profile.companySlug ?? existing.companySlug,
       registrationCompanySlug:
         result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
-      // Do not wipe a previously saved or API URL with `undefined` from a sparse `/me` payload
       profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
-      // Server URL wins so we can drop a stale device-only copy
       profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
+      // If the server sent a new location name/coords, keep them; otherwise preserve cache.
+      assignedWorkLocationName:
+        result.profile.assignedWorkLocationName ?? existing.assignedWorkLocationName,
+      assignedWorkLocationAddress:
+        result.profile.assignedWorkLocationAddress ?? existing.assignedWorkLocationAddress,
+      assignedWorkLocationLat:
+        result.profile.assignedWorkLocationLat ?? existing.assignedWorkLocationLat,
+      assignedWorkLocationLng:
+        result.profile.assignedWorkLocationLng ?? existing.assignedWorkLocationLng,
     };
     const { password: _p, password_confirmation: _c, ...safe } = merged;
     await saveAccountProfile(safe);
+    notifyAssignmentChange({ profile: safe, source: 'refresh' });
+    return { ...result, profile: safe };
   } catch {
     /* cache is best-effort */
   }

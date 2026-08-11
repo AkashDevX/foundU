@@ -61,6 +61,55 @@ export function resolveGeofenceRadiusM(status: TimeClockStatus | null | undefine
   return DEFAULT_GEOFENCE_RADIUS_M;
 }
 
+export type GeofenceSiteCoords = { lat: number; lng: number };
+
+/**
+ * Live assigned work location wins over session-stamped clock-in coords.
+ * When assignment is reassigned mid-shift, zone UI and auto clock-out must
+ * follow the new site (same idea as resolveGeofenceRadiusM).
+ */
+export function resolveGeofenceSiteCoords(
+  assigned: GeofenceSiteCoords | null | undefined,
+  session:
+    | {
+        geofence_latitude?: number | null;
+        geofence_longitude?: number | null;
+      }
+    | null
+    | undefined,
+): GeofenceSiteCoords | null {
+  if (
+    assigned &&
+    Number.isFinite(assigned.lat) &&
+    Number.isFinite(assigned.lng)
+  ) {
+    return { lat: assigned.lat, lng: assigned.lng };
+  }
+
+  const lat = session?.geofence_latitude;
+  const lng = session?.geofence_longitude;
+  if (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
+    return { lat, lng };
+  }
+
+  return null;
+}
+
+/** True when the geofence center moved enough to matter (~5–6 m). */
+export function geofenceSitesDiffer(
+  a: GeofenceSiteCoords | null | undefined,
+  b: GeofenceSiteCoords | null | undefined,
+): boolean {
+  if (!a && !b) return false;
+  if (!a || !b) return true;
+  return Math.abs(a.lat - b.lat) > 0.00005 || Math.abs(a.lng - b.lng) > 0.00005;
+}
+
 function mapScheduledShift(raw: unknown): ScheduledShiftTimes | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
