@@ -11,29 +11,32 @@ describe('geofence', () => {
   const site = { lat: -27.47, lng: 153.02 };
 
   it('keeps a near-boundary reading inside for enter checks', () => {
-    // ~99 m north of site at this latitude scale — stay inside 100 m radius
     const user = { lat: -27.46911, lng: 153.02 };
     const distance = haversineDistanceM(user.lat, user.lng, site.lat, site.lng);
     expect(distance).toBeLessThan(100);
     expect(isInsideGeofence(user, site, 100, 10)).toBe(true);
   });
 
-  it('does not treat near-boundary GPS drift as an exit', () => {
-    const user = { lat: -27.4689, lng: 153.02 }; // a bit past 100 m
-    expect(isOutsideGeofence(user, site, 100, 15)).toBe(false);
-    expect(effectiveExitRadiusM(100, 15)).toBe(165);
+  it('treats past-radius readings as an immediate exit', () => {
+    const user = { lat: -27.4689, lng: 153.02 };
+    const distance = haversineDistanceM(user.lat, user.lng, site.lat, site.lng);
+    expect(distance).toBeGreaterThan(100);
+    expect(isOutsideGeofence(user, site, 100, 0)).toBe(true);
+    expect(effectiveExitRadiusM(100, 0)).toBe(100);
+    expect(effectiveExitRadiusM(100, 15)).toBe(effectiveEnterRadiusM(100, 15));
   });
 
-  it('ignores unusable high-accuracy-error samples for exit', () => {
-    const user = { lat: -27.46, lng: 153.02 }; // clearly far
-    expect(isOutsideGeofence(user, site, 100, 120)).toBe(false);
+  it('still clocks out when GPS accuracy is poor but distance is beyond the radius', () => {
+    const user = { lat: -27.46, lng: 153.02 };
+    expect(isInsideGeofence(user, site, 100, 120)).toBe(false);
+    expect(isOutsideGeofence(user, site, 100, 120)).toBe(true);
   });
 
-  it('requires clear exit beyond hysteresis before auto clock-out', () => {
+  it('clocks out as soon as distance exceeds the geofence radius', () => {
     const user = { lat: -27.468, lng: 153.02 };
     const distance = haversineDistanceM(user.lat, user.lng, site.lat, site.lng);
     expect(distance).toBeGreaterThan(effectiveEnterRadiusM(100, 0));
-    expect(isOutsideGeofence(user, site, 100, 0)).toBe(distance > 150);
+    expect(isOutsideGeofence(user, site, 100, 0)).toBe(true);
   });
 
   it('formats within-range badge with meters remaining inside the radius', () => {

@@ -2,6 +2,7 @@ import { DEFAULT_GEOFENCE_RADIUS_M } from '../src/utils/geofence';
 import {
   mapTimeClockStatus,
   resolveGeofenceRadiusM,
+  resolveGeofenceSiteCoords,
   type TimeClockStatus,
 } from '../src/utils/timeClockStatus';
 
@@ -69,5 +70,33 @@ describe('geofence radius fetching', () => {
     expect(mapped!.open_session?.geofence_latitude).toBe(-27.47);
     expect(mapped!.open_session?.geofence_longitude).toBe(153.02);
     expect(resolveGeofenceRadiusM(mapped)).toBe(300);
+  });
+});
+
+describe('geofence site coords', () => {
+  it('prefers live assigned work location over stale session stamp', () => {
+    const site = resolveGeofenceSiteCoords(
+      { lat: -27.5, lng: 153.1 },
+      {
+        geofence_latitude: -27.47,
+        geofence_longitude: 153.02,
+      },
+    );
+
+    expect(site).toEqual({ lat: -27.5, lng: 153.1 });
+  });
+
+  it('falls back to session coords when assigned location is missing', () => {
+    const site = resolveGeofenceSiteCoords(null, {
+      geofence_latitude: -27.47,
+      geofence_longitude: 153.02,
+    });
+
+    expect(site).toEqual({ lat: -27.47, lng: 153.02 });
+  });
+
+  it('returns null when neither assigned nor session coords exist', () => {
+    expect(resolveGeofenceSiteCoords(null, null)).toBeNull();
+    expect(resolveGeofenceSiteCoords(undefined, undefined)).toBeNull();
   });
 });

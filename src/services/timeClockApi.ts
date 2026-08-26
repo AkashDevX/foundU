@@ -11,7 +11,7 @@ export type {
   ScheduledShiftTimes,
   TimeClockStatus,
 } from '../utils/timeClockStatus';
-export { mapTimeClockStatus, resolveGeofenceRadiusM } from '../utils/timeClockStatus';
+export { mapTimeClockStatus, resolveGeofenceRadiusM, resolveGeofenceSiteCoords } from '../utils/timeClockStatus';
 
 export type DeviceCoordinates = {
   latitude: number;
