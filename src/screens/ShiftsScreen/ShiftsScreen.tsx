@@ -494,28 +494,21 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
     if (!isTabActive) return;
     let cancelled = false;
     void (async () => {
-      // Only show the full-screen gate on the first load; later revisits refresh quietly.
-      if (!screenReady) {
-        setProfileLoading(true);
-      }
-      try {
-        const local = await loadAccountProfile();
-        if (cancelled) return;
-        setProfile(local);
-        const signedIn = await getSessionAuthenticated();
-        if (!signedIn || cancelled) return;
-        const api = await refreshAndCacheAccountProfileFromApi();
-        if (cancelled) return;
-        if (api.ok) setProfile(api.profile);
-      } finally {
-        if (!cancelled) setProfileLoading(false);
-      }
+      // Local cache first so the schedule fetch is not gated behind `/me`.
+      const local = await loadAccountProfile();
+      if (cancelled) return;
+      setProfile(local);
+      setProfileLoading(false);
+
+      const signedIn = await getSessionAuthenticated();
+      if (!signedIn || cancelled) return;
+      const api = await refreshAndCacheAccountProfileFromApi();
+      if (cancelled) return;
+      if (api.ok) setProfile(api.profile);
     })();
     return () => {
       cancelled = true;
     };
-    // screenReady intentionally omitted — read as a one-shot gate for the first visit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTabActive]);
 
   useEffect(() => {

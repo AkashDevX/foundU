@@ -36,6 +36,10 @@ android/tools/ninja.exe
 !debug.keystore
 .kotlin/
 
+# Firebase (local only — do not commit)
+android/app/google-services.json
+ios/GoogleService-Info.plist
+
 # node.js
 #
 node_modules/

@@ -1304,6 +1304,7 @@ export const chatStyles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
     minHeight: 48,
+    minWidth: 0,
   },
   chatHeaderTitle: {
     fontFamily: fontFamily.bold,
@@ -1414,7 +1415,7 @@ export const chatStyles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    rowGap: spacing.sm,
+    rowGap: spacing.md,
     marginBottom: spacing.md,
   },
   faqChip: {
@@ -1428,7 +1429,13 @@ export const chatStyles = StyleSheet.create({
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    minHeight: 48,
+    minHeight: 56,
+    overflow: 'hidden',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
   faqChipIconWrap: {
     width: 32,
@@ -1437,11 +1444,14 @@ export const chatStyles = StyleSheet.create({
     backgroundColor: 'rgba(0,76,153,0.08)',
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
   },
   faqChipText: {
     flex: 1,
+    minWidth: 0,
     fontFamily: fontFamily.medium,
     fontSize: 13,
+    lineHeight: 18,
     color: chatBlue,
   },
   messagesList: { flex: 1 },
@@ -1478,7 +1488,7 @@ export const chatStyles = StyleSheet.create({
   },
   messageRowAssistant: { alignSelf: 'flex-start', maxWidth: '88%' as const },
   messageRowUser: { alignSelf: 'flex-end', maxWidth: '82%' as const, flexDirection: 'row-reverse' },
-  messageContentCol: { flexShrink: 1 },
+  messageContentCol: { flexShrink: 1, minWidth: 0 },
   assistantAvatarSmall: {
     width: 28,
     height: 28,
@@ -1570,7 +1580,9 @@ export const chatStyles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
     paddingTop: spacing.sm,
-    paddingBottom: spacing.xs,
+    paddingBottom: spacing.sm,
+    flexGrow: 0,
+    flexShrink: 0,
   },
   faqQuickBarLabel: {
     fontFamily: fontFamily.semiBold,
@@ -1583,7 +1595,9 @@ export const chatStyles = StyleSheet.create({
   },
   faqQuickScroll: {
     paddingHorizontal: spacing.lg,
-    gap: spacing.sm,
+    paddingBottom: 2,
+    alignItems: 'center',
+    flexDirection: 'row',
   },
   faqQuickChip: {
     flexDirection: 'row',
@@ -1596,6 +1610,7 @@ export const chatStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,76,153,0.18)',
     marginRight: spacing.sm,
+    flexShrink: 0,
   },
   faqQuickChipPressed: {
     backgroundColor: 'rgba(0,76,153,0.08)',

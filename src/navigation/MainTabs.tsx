@@ -7,6 +7,8 @@ import {
   Animated,
   LayoutChangeEvent,
   Platform,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,6 +23,8 @@ import { TrainingScreen } from '../screens/TrainingScreen';
 import { ChatScreen } from '../screens/ChatScreen';
 import { FLOATING_TAB_BAR_BOTTOM_INSET } from './floatingTabBarMetrics';
 import { runWhenIdle } from '../utils/runWhenIdle';
+import { fetchConversations } from '../services/messagingApi';
+import { startChatPush } from '../services/chatPush';
 
 const ACTIVE = colors.primary;
 const INACTIVE = '#94A3B8';
@@ -28,7 +32,7 @@ const DOCK_PAD_H = 8;
 const DOCK_PAD_V = 8;
 
 const TABS = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'home', screen: DashboardScreen },
+  { key: 'dashboard', label: 'Home', icon: 'home', screen: DashboardScreen },
   { key: 'shifts', label: 'Shifts', icon: 'calendar', screen: ShiftsScreen },
   { key: 'tasks', label: 'Tasks', icon: 'check-square', screen: TasksScreen },
   { key: 'training', label: 'Train', icon: 'book-open', screen: TrainingScreen },
@@ -45,15 +49,19 @@ function TabItem({
   isActive,
   onPress,
   onLayout,
+  badgeCount = 0,
 }: {
   label: string;
   icon: string;
   isActive: boolean;
   onPress: () => void;
   onLayout: (e: LayoutChangeEvent) => void;
+  badgeCount?: number;
 }) {
   const focus = useRef(new Animated.Value(isActive ? 1 : 0)).current;
   const press = useRef(new Animated.Value(1)).current;
+  const showBadge = badgeCount > 0;
+  const badgeLabel = badgeCount > 99 ? '99+' : String(badgeCount);
 
   useEffect(() => {
     Animated.spring(focus, {
@@ -101,7 +109,7 @@ function TabItem({
       onLayout={onLayout}
       accessibilityRole="tab"
       accessibilityState={{ selected: isActive }}
-      accessibilityLabel={label}
+      accessibilityLabel={showBadge ? `${label}, ${badgeCount} unread` : label}
     >
       <Animated.View
         style={[
@@ -116,6 +124,11 @@ function TabItem({
             size={isActive ? 23 : 21}
             color={isActive ? ACTIVE : INACTIVE}
           />
+          {showBadge ? (
+            <View style={styles.tabBadge} pointerEvents="none">
+              <Text style={styles.tabBadgeText}>{badgeLabel}</Text>
+            </View>
+          ) : null}
         </View>
         <Animated.Text
           style={[
@@ -135,9 +148,11 @@ function TabItem({
 function FloatingTabDock({
   activeTab,
   onChange,
+  chatUnreadCount = 0,
 }: {
   activeTab: MainTabKey;
   onChange: (key: MainTabKey) => void;
+  chatUnreadCount?: number;
 }) {
   const [layouts, setLayouts] = useState<Partial<Record<MainTabKey, TabLayout>>>({});
   const indicatorX = useRef(new Animated.Value(0)).current;
@@ -238,6 +253,7 @@ function FloatingTabDock({
               isActive={activeIndex === index}
               onPress={() => onChange(tab.key)}
               onLayout={(e) => onTabLayout(tab.key, e)}
+              badgeCount={tab.key === 'chat' ? chatUnreadCount : 0}
             />
           ))}
         </View>
@@ -246,16 +262,30 @@ function FloatingTabDock({
   );
 }
 
+/** Count of conversations that have at least one unread message. */
+function unreadChatCountFromInbox(
+  conversations: Array<{ unread_count?: number | null }>,
+): number {
+  return conversations.reduce((total, c) => total + ((c.unread_count || 0) > 0 ? 1 : 0), 0);
+}
+
 export function MainTabs() {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<MainTabKey>('dashboard');
   const [mountedTabs, setMountedTabs] = useState<Set<MainTabKey>>(() => new Set(['dashboard']));
   const [monitorReady, setMonitorReady] = useState(false);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
 
   const bottomOffset = useMemo(
     () => Math.max(insets.bottom, FLOATING_TAB_BAR_BOTTOM_INSET),
     [insets.bottom],
   );
+
+  const refreshChatBadge = useCallback(async () => {
+    const res = await fetchConversations();
+    if (!res.ok) return;
+    setChatUnreadCount(unreadChatCountFromInbox(res.data.conversations || []));
+  }, []);
 
   useEffect(() => {
     setMountedTabs((prev) => {
@@ -270,6 +300,51 @@ export function MainTabs() {
     const cancel = runWhenIdle(() => setMonitorReady(true));
     return cancel;
   }, []);
+
+  // Register FCM token for locked/background chat alerts.
+  useEffect(() => {
+    void startChatPush();
+  }, []);
+
+  // Badge sync while signed in — keep light so local `artisan serve` is not starved.
+  // Skip while Chat is open (ChatScreen already polls the inbox).
+  useEffect(() => {
+    if (activeTab === 'chat') return undefined;
+
+    let cancelled = false;
+    let inFlight = false;
+    const tick = async () => {
+      if (cancelled || inFlight || AppState.currentState !== 'active') return;
+      inFlight = true;
+      try {
+        await refreshChatBadge();
+      } finally {
+        inFlight = false;
+      }
+    };
+    void tick();
+    const interval = setInterval(() => {
+      void tick();
+    }, 45_000);
+
+    const onAppState = (next: AppStateStatus) => {
+      if (next === 'active') void tick();
+    };
+    const sub = AppState.addEventListener('change', onAppState);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [activeTab, refreshChatBadge]);
+
+  // Refresh once after leaving Chat (messages may have been marked read).
+  useEffect(() => {
+    if (activeTab !== 'chat') {
+      void refreshChatBadge();
+    }
+  }, [activeTab, refreshChatBadge]);
 
   return (
     <LogoutSweetAlertProvider>
@@ -295,7 +370,11 @@ export function MainTabs() {
         </View>
 
         <View style={[styles.tabBarOuter, { bottom: bottomOffset }]}>
-          <FloatingTabDock activeTab={activeTab} onChange={setActiveTab} />
+          <FloatingTabDock
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            chatUnreadCount={chatUnreadCount}
+          />
         </View>
       </View>
     </LogoutSweetAlertProvider>
@@ -422,6 +501,29 @@ const styles = StyleSheet.create({
     height: 30,
     borderRadius: 15,
     backgroundColor: 'rgba(0, 61, 122, 0.12)',
+  },
+
+  tabBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -10,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: '#DC2626',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  tabBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    lineHeight: 11,
+    fontFamily: fontFamily.semiBold,
+    textAlign: 'center',
   },
 
   tabLabel: {

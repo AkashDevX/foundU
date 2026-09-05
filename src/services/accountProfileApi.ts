@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import type { UserProfileSnapshot } from '../types/userProfile';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
@@ -526,14 +527,18 @@ export async function fetchAuthenticatedAccountProfile(): Promise<FetchAccountPr
 
   let res: Response;
   try {
-    res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-        'X-Company-Slug': slug,
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Company-Slug': slug,
+        },
       },
-    });
+      { timeoutMs: 15_000, retries: 0 },
+    );
   } catch {
     return {
       ok: false,
@@ -565,43 +570,56 @@ export async function fetchAuthenticatedAccountProfile(): Promise<FetchAccountPr
 
 /**
  * Fetches `/api/v1/me` and merges into local AsyncStorage (no passwords). Used after a successful pull.
+ * Concurrent callers share one in-flight request so geofence/tabs don't stampede `/me`.
  */
+let profileRefreshInFlight: Promise<FetchAccountProfileResult> | null = null;
+
 export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccountProfileResult> {
-  const result = await fetchAuthenticatedAccountProfile();
-  if (!result.ok) {
+  if (profileRefreshInFlight) {
+    return profileRefreshInFlight;
+  }
+
+  profileRefreshInFlight = (async (): Promise<FetchAccountProfileResult> => {
+    const result = await fetchAuthenticatedAccountProfile();
+    if (!result.ok) {
+      return result;
+    }
+    try {
+      const existing = await loadAccountProfile();
+      const apiPhoto = result.profile.profilePhotoUrl;
+      const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
+      // Don't let undefined API fields wipe previously known assignment coords/name.
+      const merged: UserProfileSnapshot = {
+        ...existing,
+        ...Object.fromEntries(
+          Object.entries(result.profile).filter(([, value]) => value !== undefined),
+        ),
+        companySlug: result.profile.companySlug ?? existing.companySlug,
+        registrationCompanySlug:
+          result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
+        profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
+        profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
+        // If the server sent a new location name/coords, keep them; otherwise preserve cache.
+        assignedWorkLocationName:
+          result.profile.assignedWorkLocationName ?? existing.assignedWorkLocationName,
+        assignedWorkLocationAddress:
+          result.profile.assignedWorkLocationAddress ?? existing.assignedWorkLocationAddress,
+        assignedWorkLocationLat:
+          result.profile.assignedWorkLocationLat ?? existing.assignedWorkLocationLat,
+        assignedWorkLocationLng:
+          result.profile.assignedWorkLocationLng ?? existing.assignedWorkLocationLng,
+      };
+      const { password: _p, password_confirmation: _c, ...safe } = merged;
+      await saveAccountProfile(safe);
+      notifyAssignmentChange({ profile: safe, source: 'refresh' });
+      return { ...result, profile: safe };
+    } catch {
+      /* cache is best-effort */
+    }
     return result;
-  }
-  try {
-    const existing = await loadAccountProfile();
-    const apiPhoto = result.profile.profilePhotoUrl;
-    const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
-    // Don't let undefined API fields wipe previously known assignment coords/name.
-    const merged: UserProfileSnapshot = {
-      ...existing,
-      ...Object.fromEntries(
-        Object.entries(result.profile).filter(([, value]) => value !== undefined),
-      ),
-      companySlug: result.profile.companySlug ?? existing.companySlug,
-      registrationCompanySlug:
-        result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
-      profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
-      profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
-      // If the server sent a new location name/coords, keep them; otherwise preserve cache.
-      assignedWorkLocationName:
-        result.profile.assignedWorkLocationName ?? existing.assignedWorkLocationName,
-      assignedWorkLocationAddress:
-        result.profile.assignedWorkLocationAddress ?? existing.assignedWorkLocationAddress,
-      assignedWorkLocationLat:
-        result.profile.assignedWorkLocationLat ?? existing.assignedWorkLocationLat,
-      assignedWorkLocationLng:
-        result.profile.assignedWorkLocationLng ?? existing.assignedWorkLocationLng,
-    };
-    const { password: _p, password_confirmation: _c, ...safe } = merged;
-    await saveAccountProfile(safe);
-    notifyAssignmentChange({ profile: safe, source: 'refresh' });
-    return { ...result, profile: safe };
-  } catch {
-    /* cache is best-effort */
-  }
-  return result;
+  })().finally(() => {
+    profileRefreshInFlight = null;
+  });
+
+  return profileRefreshInFlight;
 }

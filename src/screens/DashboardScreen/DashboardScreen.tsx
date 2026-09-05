@@ -56,7 +56,6 @@ import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
 import {
   DEFAULT_GEOFENCE_RADIUS_M,
   formatZoneBadgeLabel,
-  GEOFENCE_POLL_INTERVAL_MS,
   haversineDistanceM,
   isInsideGeofence,
 } from '../../utils/geofence';
@@ -754,9 +753,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     };
 
     void syncAssignment();
+    // Keep Home assignment sync lighter than GPS evaluate — overlapping `/me` +
+    // time-clock every 10s blocked other tabs on local `artisan serve`.
     const timer = setInterval(() => {
       void syncAssignment();
-    }, GEOFENCE_POLL_INTERVAL_MS);
+    }, 20_000);
 
     return () => {
       cancelled = true;

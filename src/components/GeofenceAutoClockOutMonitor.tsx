@@ -33,6 +33,13 @@ import {
   type LatLng,
 } from '../utils/geofence';
 
+/** How often we re-hit `/me` for assignment coords (time-clock already covers punch state). */
+const PROFILE_REFRESH_INTERVAL_MS = 60_000;
+/** Server resync for clock-in/out changes — GPS watch handles exit checks locally. */
+const CLOCK_RESYNC_INTERVAL_MS = 45_000;
+
+let lastProfileRefreshAt = 0;
+
 function assignedCoordsFromProfile(profile: Awaited<ReturnType<typeof loadAccountProfile>>): LatLng | null {
   const lat = Number(profile?.assignedWorkLocationLat);
   const lng = Number(profile?.assignedWorkLocationLng);
@@ -40,14 +47,23 @@ function assignedCoordsFromProfile(profile: Awaited<ReturnType<typeof loadAccoun
   return { lat, lng };
 }
 
-async function loadFreshAssignedCoords(): Promise<LatLng | null> {
-  try {
-    const api = await refreshAndCacheAccountProfileFromApi();
-    if (api.ok) {
-      return assignedCoordsFromProfile(api.profile);
+/**
+ * Prefer local assignment coords; refresh `/me` at most once per minute.
+ * Hitting `/me` on every 10s resync starved other tab APIs on `artisan serve`.
+ */
+async function loadAssignedCoords(opts?: { forceProfileRefresh?: boolean }): Promise<LatLng | null> {
+  const force = opts?.forceProfileRefresh === true;
+  const due = force || Date.now() - lastProfileRefreshAt >= PROFILE_REFRESH_INTERVAL_MS;
+  if (due) {
+    lastProfileRefreshAt = Date.now();
+    try {
+      const api = await refreshAndCacheAccountProfileFromApi();
+      if (api.ok) {
+        return assignedCoordsFromProfile(api.profile);
+      }
+    } catch {
+      /* fall through to local cache */
     }
-  } catch {
-    /* fall through to local cache */
   }
   return assignedCoordsFromProfile(await loadAccountProfile());
 }
@@ -300,7 +316,7 @@ export function GeofenceAutoClockOutMonitor() {
 
     const [clockResult, assigned] = await Promise.all([
       fetchTimeClockStatus(),
-      loadFreshAssignedCoords(),
+      loadAssignedCoords(),
     ]);
 
     if (!clockResult.ok) {
@@ -326,7 +342,7 @@ export function GeofenceAutoClockOutMonitor() {
     const unsubscribeClock = subscribeTimeClockChange((event) => {
       if (event.timeClock.is_clocked_in) {
         void (async () => {
-          const assigned = await loadFreshAssignedCoords();
+          const assigned = await loadAssignedCoords({ forceProfileRefresh: true });
           const siteCoords = siteCoordsForMonitoring(event.timeClock, assigned);
           if (siteCoords) {
             await startMonitoring(event.timeClock, siteCoords);
@@ -358,7 +374,7 @@ export function GeofenceAutoClockOutMonitor() {
     const subscription = AppState.addEventListener('change', onAppStateChange);
     const resyncTimer = setInterval(() => {
       void syncClockState();
-    }, GEOFENCE_POLL_INTERVAL_MS);
+    }, CLOCK_RESYNC_INTERVAL_MS);
 
     return () => {
       unsubscribeClock();

@@ -51,7 +51,9 @@ export async function hasWorkLocationPermission(): Promise<boolean> {
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms);
+  });
 }
 
 /** Wait until app is active again, but never hang forever. */

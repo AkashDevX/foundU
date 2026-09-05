@@ -660,7 +660,7 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                           accessibilityRole="button"
                           accessibilityState={{ expanded: open }}
                         >
-                          <Text style={styles.sectionTitle}>{section.title}</Text>
+                          <Text style={styles.accordionSectionTitle}>{section.title}</Text>
                           <Feather
                             name={open ? 'chevron-up' : 'chevron-down'}
                             size={20}
@@ -1180,7 +1180,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 14,
   },
-  sectionTitle: {
+  accordionSectionTitle: {
     flex: 1,
     fontFamily: fontFamily.semiBold,
     fontSize: 15,

@@ -14,6 +14,7 @@ import { AuthSessionProvider, useAuthSession } from './src/context/AuthSessionCo
 import { LocationDisclosureProvider } from './src/context/LocationDisclosureContext';
 import { AppShell } from './src/components/AppShell';
 import { LoginScreen } from './src/screens/LoginScreen/LoginScreen';
+import { navigationRef } from './src/services/chatPush';
 import { colors } from './src/theme/theme';
 
 const Stack = createNativeStackNavigator();
@@ -40,7 +41,7 @@ function NavigationRoot() {
   // AuthSessionProvider), so this reflects the stored login state at launch.
   const { initialAuthenticated } = useAuthSession();
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <View style={styles.navShell}>
         <StatusBar barStyle="light-content" backgroundColor="#003D7A" />
         <Stack.Navigator
@@ -63,6 +64,28 @@ function NavigationRoot() {
           <Stack.Screen
             name="MyProfile"
             getComponent={() => require('./src/screens/MyProfileScreen').MyProfileScreen}
+          />
+          <Stack.Screen
+            name="ConversationThread"
+            getComponent={() =>
+              require('./src/screens/ChatScreen').ConversationThreadScreen
+            }
+          />
+          <Stack.Screen
+            name="NewChat"
+            getComponent={() => require('./src/screens/ChatScreen').NewChatScreen}
+          />
+          <Stack.Screen
+            name="NewGroup"
+            getComponent={() => require('./src/screens/ChatScreen').NewGroupScreen}
+          />
+          <Stack.Screen
+            name="BlockedUsers"
+            getComponent={() => require('./src/screens/ChatScreen').BlockedUsersScreen}
+          />
+          <Stack.Screen
+            name="ChatHelp"
+            getComponent={() => require('./src/screens/ChatScreen').ChatHelpScreen}
           />
           <Stack.Screen
             name="Main"

@@ -1,426 +1,619 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   FlatList,
-  TextInput,
   TouchableOpacity,
   StatusBar,
-  KeyboardAvoidingView,
-  Platform,
-  ListRenderItemInfo,
-  Keyboard,
-  Animated,
+  RefreshControl,
+  ActivityIndicator,
   ScrollView,
+  StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
-import { dashboardStyles, chatStyles } from '../../styles/styles';
-import { colors, spacing } from '../../theme/theme';
+import { dashboardStyles } from '../../styles/styles';
+import { colors, fontFamily, spacing } from '../../theme/theme';
 import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage';
 import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
-import { CHAT_FAQS, findFaqAnswer, type ChatFaq } from './chatFaqs';
-
-export type ChatMessage = {
-  id: string;
-  role: 'assistant' | 'user';
-  text: string;
-  sentAt: number;
-};
+import { fetchConversations, fetchMessagingPolicy, acceptMessagingPolicy } from '../../services/messagingApi';
+import type { MessagingConversation } from '../../types/messaging';
+import { MessagingPolicyCard } from './MessagingPolicyCard';
 
 type ChatScreenProps = {
   isTabActive?: boolean;
 };
 
-const ASSISTANT_ACCENT = '#004C99';
+const AVATAR_TONES = ['#003D7A', '#0052A2', '#0F766E', '#7C3AED', '#B45309', '#BE185D'] as const;
 
-const SEED_MESSAGES: ChatMessage[] = [
-  {
-    id: 'welcome',
-    role: 'assistant',
-    text:
-      "Hi — I'm your CruLynk assistant. Tap any FAQ below and I'll answer right away, or type your own question.",
-    sentAt: Date.now() - 1000 * 60 * 4,
-  },
-];
-
-const FALLBACK_REPLY =
-  "I don't have a specific answer for that yet. Try one of the FAQ buttons below — they cover safety, clock-in, shifts, tasks, and more.";
-
-let messageId = 0;
-function nextId(): string {
-  messageId += 1;
-  return `m-${Date.now()}-${messageId}`;
+function previewText(c: MessagingConversation): string {
+  if (c.block_status === 'blocked_by_me') return 'You blocked this chat';
+  if (c.block_status === 'blocked_me') return 'You’ve been blocked';
+  const last = c.last_message;
+  if (!last) return 'No messages yet — say hello';
+  if (last.message_type === 'image') return `${last.sender_display_name}: Photo`;
+  if (last.message_type === 'file') return `${last.sender_display_name}: File`;
+  if (last.message_type === 'system') return last.body || 'Group updated';
+  const body = (last.body || '').trim();
+  return body ? `${last.sender_display_name}: ${body}` : `${last.sender_display_name}: sent a message`;
 }
 
-function formatMessageTime(sentAt: number): string {
-  const d = new Date(sentAt);
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+function initialsFromTitle(title: string): string {
+  const parts = title.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
-function TypingIndicator() {
-  const dot1 = useRef(new Animated.Value(0.35)).current;
-  const dot2 = useRef(new Animated.Value(0.35)).current;
-  const dot3 = useRef(new Animated.Value(0.35)).current;
-
-  useEffect(() => {
-    const pulse = (anim: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(anim, { toValue: 1, duration: 320, useNativeDriver: true }),
-          Animated.timing(anim, { toValue: 0.35, duration: 320, useNativeDriver: true }),
-        ]),
-      );
-
-    const a1 = pulse(dot1, 0);
-    const a2 = pulse(dot2, 120);
-    const a3 = pulse(dot3, 240);
-    a1.start();
-    a2.start();
-    a3.start();
-    return () => {
-      a1.stop();
-      a2.stop();
-      a3.stop();
-    };
-  }, [dot1, dot2, dot3]);
-
-  const styles = chatStyles;
-  return (
-    <View style={styles.typingRow}>
-      <View style={styles.assistantAvatarSmall}>
-        <Feather name="cpu" size={14} color={ASSISTANT_ACCENT} />
-      </View>
-      <View style={styles.typingBubble}>
-        {[dot1, dot2, dot3].map((opacity, i) => (
-          <Animated.View key={i} style={[styles.typingDot, { opacity }]} />
-        ))}
-      </View>
-    </View>
-  );
+function toneForId(id: number): string {
+  return AVATAR_TONES[Math.abs(id) % AVATAR_TONES.length];
 }
 
-type FaqQuickBarProps = {
-  onSelect: (faq: ChatFaq) => void;
-  disabled: boolean;
-};
-
-function FaqQuickBar({ onSelect, disabled }: FaqQuickBarProps) {
-  const styles = chatStyles;
-  return (
-    <View style={styles.faqQuickBar}>
-      <Text style={styles.faqQuickBarLabel}>FAQs — tap for an instant answer</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.faqQuickScroll}
-        keyboardShouldPersistTaps="handled"
-      >
-        {CHAT_FAQS.map((faq) => (
-          <TouchableOpacity
-            key={faq.id}
-            style={styles.faqQuickChip}
-            onPress={() => onSelect(faq)}
-            activeOpacity={0.75}
-            disabled={disabled}
-          >
-            <Feather name={faq.icon} size={14} color={ASSISTANT_ACCENT} />
-            <Text style={styles.faqQuickChipText}>{faq.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-    </View>
-  );
+function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return 'Just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`;
+  if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d`;
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return '';
+  }
 }
 
 export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
-  const navigation = useNavigation<any>();
-  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
+  const { openLogoutSweetAlert } = useLogoutSweetAlert();
   const headerProfile = useHeaderProfileSnapshot();
   const headerStyles = dashboardStyles;
-  const styles = chatStyles;
-  const listRef = useRef<FlatList<ChatMessage>>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>(SEED_MESSAGES);
-  const [inputText, setInputText] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const tabBarReserve = floatingTabBarClearance(insets.bottom);
-  const scrollPendingRef = useRef(false);
-  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const scrollToLatest = useCallback((animated = true) => {
-    scrollPendingRef.current = true;
-    requestAnimationFrame(() => {
-      if (!listRef.current) return;
-      listRef.current.scrollToEnd({ animated });
-      scrollPendingRef.current = false;
-    });
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [conversations, setConversations] = useState<MessagingConversation[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(true);
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [policyContent, setPolicyContent] = useState('');
+  const [policyVersion, setPolicyVersion] = useState(1);
+  const [policyUpdatedOn, setPolicyUpdatedOn] = useState<string | null>(null);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [acceptingPolicy, setAcceptingPolicy] = useState(false);
+
+  const loadInFlightRef = useRef(false);
+
+  const loadPolicy = useCallback(async () => {
+    setPolicyLoading(true);
+    setPolicyError(null);
+    const res = await fetchMessagingPolicy();
+    if (!res.ok) {
+      setPolicyError(res.message);
+      setPolicyAccepted(false);
+      setPolicyLoading(false);
+      return;
+    }
+    setPolicyAccepted(Boolean(res.data.accepted));
+    setPolicyContent(res.data.content || '');
+    setPolicyVersion(res.data.version || 1);
+    setPolicyUpdatedOn(res.data.last_updated_on || null);
+    setPolicyLoading(false);
   }, []);
 
-  const onScrollToIndexFailed = useCallback(() => {
-    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+  const load = useCallback(async (isRefresh = false) => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchConversations();
+      if (!res.ok) {
+        setError(res.message);
+        if (!isRefresh) setConversations([]);
+      } else {
+        setConversations(res.data.conversations || []);
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+      loadInFlightRef.current = false;
+    }
   }, []);
 
-  useEffect(() => {
-    if (!isTabActive) return;
-    const t = setTimeout(() => scrollToLatest(false), 80);
-    return () => clearTimeout(t);
-  }, [isTabActive, scrollToLatest]);
+  const onAcceptPolicy = useCallback(async () => {
+    setAcceptingPolicy(true);
+    setPolicyError(null);
+    const res = await acceptMessagingPolicy();
+    setAcceptingPolicy(false);
+    if (!res.ok) {
+      setPolicyError(res.message || 'Could not accept the policy.');
+      return;
+    }
+    setPolicyAccepted(true);
+    void load(false);
+  }, [load]);
 
   useEffect(() => {
-    scrollToLatest(true);
-  }, [messages.length, isTyping, scrollToLatest]);
+    if (isTabActive) {
+      void loadPolicy();
+      void load(false);
+    }
+  }, [isTabActive, load, loadPolicy]);
 
   useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => scrollToLatest(true),
-    );
-    return () => showSub.remove();
-  }, [scrollToLatest]);
-
-  useEffect(
-    () => () => {
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    },
-    [],
-  );
-
-  const appendExchange = useCallback((userText: string, assistantText: string) => {
-    const trimmed = userText.trim();
-    if (!trimmed || isTyping) return;
-
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', text: trimmed, sentAt: Date.now() };
-    setMessages((prev) => [...prev, userMsg]);
-    setIsTyping(true);
-
-    const replyDelay = 500 + Math.min(trimmed.length * 6, 500);
-    typingTimerRef.current = setTimeout(() => {
-      const botMsg: ChatMessage = {
-        id: nextId(),
-        role: 'assistant',
-        text: assistantText,
-        sentAt: Date.now(),
-      };
-      setIsTyping(false);
-      setMessages((prev) => [...prev, botMsg]);
-      typingTimerRef.current = null;
-    }, replyDelay);
-  }, [isTyping]);
-
-  const onSend = useCallback(() => {
-    const t = inputText.trim();
-    if (!t || isTyping) return;
-    setInputText('');
-    appendExchange(t, findFaqAnswer(t) ?? FALLBACK_REPLY);
-  }, [inputText, isTyping, appendExchange]);
-
-  const onFaqSelect = useCallback(
-    (faq: ChatFaq) => {
-      appendExchange(faq.question, faq.answer);
-    },
-    [appendExchange],
-  );
-
-  const renderItem = useCallback(
-    ({ item, index }: ListRenderItemInfo<ChatMessage>) => {
-      const isUser = item.role === 'user';
-      const showDate =
-        index === 0 ||
-        new Date(item.sentAt).toDateString() !== new Date(messages[index - 1]?.sentAt ?? 0).toDateString();
-
-      return (
-        <View>
-          {showDate ? (
-            <View style={styles.datePillWrap}>
-              <View style={styles.datePill}>
-                <Text style={styles.datePillText}>
-                  {new Date(item.sentAt).toDateString() === new Date().toDateString()
-                    ? 'Today'
-                    : new Date(item.sentAt).toLocaleDateString(undefined, {
-                        weekday: 'short',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                </Text>
-              </View>
-            </View>
-          ) : null}
-          <View style={[styles.messageRow, isUser ? styles.messageRowUser : styles.messageRowAssistant]}>
-            {!isUser ? (
-              <View style={styles.assistantAvatarSmall}>
-                <Feather name="cpu" size={14} color={ASSISTANT_ACCENT} />
-              </View>
-            ) : null}
-            <View style={styles.messageContentCol}>
-              <View style={isUser ? styles.bubbleUser : styles.bubbleAssistant}>
-                <Text style={isUser ? styles.bubbleTextUser : styles.bubbleTextAssistant}>{item.text}</Text>
-              </View>
-              <Text style={[styles.bubbleMeta, isUser && styles.bubbleMetaUser]}>
-                {formatMessageTime(item.sentAt)}
-              </Text>
-            </View>
-          </View>
-        </View>
-      );
-    },
-    [styles, messages],
-  );
-
-  const listHeader = (
-    <View style={styles.listHeaderWrap}>
-      <View style={styles.heroCard}>
-        <View style={styles.heroIconWrap}>
-          <Feather name="message-circle" size={22} color={ASSISTANT_ACCENT} />
-        </View>
-        <Text style={styles.heroTitle}>Worksite assistant</Text>
-        <Text style={styles.heroSubtitle}>
-          Choose a FAQ below for an instant answer about safety, shifts, tasks, and more.
-        </Text>
-        <View style={styles.heroStatusRow}>
-          <View style={styles.onlineDot} />
-          <Text style={styles.heroStatusText}>Ready to help</Text>
-        </View>
-      </View>
-
-      <Text style={styles.faqSectionLabel}>Popular questions</Text>
-      <View style={styles.faqGrid}>
-        {CHAT_FAQS.slice(0, 6).map((faq) => (
-          <TouchableOpacity
-            key={faq.id}
-            style={styles.faqChip}
-            onPress={() => onFaqSelect(faq)}
-            activeOpacity={0.85}
-            disabled={isTyping}
-          >
-            <View style={styles.faqChipIconWrap}>
-              <Feather name={faq.icon} size={16} color={ASSISTANT_ACCENT} />
-            </View>
-            <Text style={styles.faqChipText} numberOfLines={2}>
-              {faq.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-
-  const listFooter = (
-    <View style={styles.listFooterWrap}>
-      {isTyping ? <TypingIndicator /> : null}
-      <View style={{ height: spacing.md }} />
-    </View>
-  );
+    if (!isTabActive || !policyAccepted) return;
+    const id = setInterval(() => {
+      void load(true);
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [isTabActive, load, policyAccepted]);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <View style={[headerStyles.header, styles.chatHeader]}>
-        <View style={styles.headerSideSlot}>
-          <TouchableOpacity
-            style={headerStyles.profileAvatarWrap}
-            onPress={() => navigation.navigate('MyProfile')}
-            activeOpacity={0.75}
-            accessibilityLabel="Open my profile"
-          >
-            <View style={headerStyles.profileAvatar}>
-              <ProfilePhotoAvatar
-                photoUri={getDisplayProfilePhotoUri(headerProfile)}
-                size={44}
-                iconSize={24}
-                iconColor={colors.primary}
-              />
-            </View>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.headerTitleBlock}>
-          <Text style={styles.chatHeaderTitle} numberOfLines={1}>
-            Assistant
-          </Text>
-          <View style={styles.headerSubtitleRow}>
-            <View style={styles.onlineDotSmall} />
-            <Text style={styles.headerSubtitle} numberOfLines={1}>
-              Online · Site support
-            </Text>
+      <View style={headerStyles.header}>
+        <TouchableOpacity
+          style={headerStyles.profileAvatarWrap}
+          onPress={() => navigation.navigate('MyProfile' as never)}
+          activeOpacity={0.75}
+          accessibilityLabel="Open my profile"
+        >
+          <View style={headerStyles.profileAvatar}>
+            <ProfilePhotoAvatar
+              photoUri={getDisplayProfilePhotoUri(headerProfile)}
+              size={44}
+              iconSize={24}
+              iconColor={colors.primary}
+            />
           </View>
-        </View>
-        <View style={styles.headerSideSlot}>
+        </TouchableOpacity>
+        <Text style={headerStyles.headerTitle}>Messages</Text>
+        {policyAccepted ? (
           <TouchableOpacity
             style={headerStyles.bellBtn}
             activeOpacity={0.7}
             onPress={openLogoutSweetAlert}
             accessibilityLabel="Log out"
           >
-            <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+            <Feather name="log-out" size={24} color={colors.primary} />
           </TouchableOpacity>
-        </View>
+        ) : (
+          <TouchableOpacity
+            style={headerStyles.bellBtn}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('ChatHelp' as never)}
+            accessibilityLabel="Help"
+          >
+            <Feather name="help-circle" size={24} color={colors.primary} />
+          </TouchableOpacity>
+        )}
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.keyboardFill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-      >
-        <View style={styles.chatBody}>
-          <FlatList
-            ref={listRef}
-            style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            renderItem={renderItem}
-            ListHeaderComponent={listHeader}
-            ListFooterComponent={listFooter}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="interactive"
-            onContentSizeChange={() => {
-              if (scrollPendingRef.current || isTyping || messages.length > SEED_MESSAGES.length) {
-                scrollToLatest(false);
-              }
-            }}
-            onScrollToIndexFailed={onScrollToIndexFailed}
+      {policyLoading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={styles.loadingHint}>Loading messaging terms…</Text>
+        </View>
+      ) : !policyAccepted ? (
+        <ScrollView
+          style={styles.policyScroll}
+          contentContainerStyle={{
+            paddingTop: spacing.lg,
+            paddingBottom: floatingTabBarClearance(insets.bottom) + 24,
+            paddingHorizontal: spacing.lg,
+            flexGrow: 1,
+          }}
+          showsVerticalScrollIndicator
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+        >
+          <MessagingPolicyCard
+            content={policyContent}
+            version={policyVersion}
+            lastUpdatedOn={policyUpdatedOn}
+            accepting={acceptingPolicy}
+            error={policyError}
+            onAccept={() => void onAcceptPolicy()}
           />
-
-          <View style={[styles.composerDock, { paddingBottom: tabBarReserve }]}>
-            <FaqQuickBar onSelect={onFaqSelect} disabled={isTyping} />
-            <View style={styles.composerRow}>
-              <View style={styles.inputShell}>
-                <Feather name="edit-3" size={18} color="#9CA3AF" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.inputField}
-                  placeholder="Ask about safety, shifts, tasks…"
-                  placeholderTextColor="#9CA3AF"
-                  value={inputText}
-                  onChangeText={setInputText}
-                  multiline
-                  maxLength={2000}
-                  returnKeyType="default"
-                  blurOnSubmit={false}
-                  editable={!isTyping}
-                  onFocus={() => scrollToLatest(true)}
-                />
-              </View>
+        </ScrollView>
+      ) : loading && conversations.length === 0 ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={styles.loadingHint}>Loading messages…</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={conversations}
+          keyExtractor={(item) => String(item.id)}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{
+            paddingTop: spacing.lg,
+            paddingBottom: floatingTabBarClearance(insets.bottom) + 16,
+            flexGrow: 1,
+          }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                void loadPolicy();
+                void load(true);
+              }}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
+          ListHeaderComponent={
+            <View style={styles.actionsRow}>
               <TouchableOpacity
-                style={[styles.sendBtn, (!inputText.trim() || isTyping) && styles.sendBtnDisabled]}
-                onPress={onSend}
-                disabled={!inputText.trim() || isTyping}
-                accessibilityRole="button"
-                accessibilityLabel="Send message"
+                style={styles.actionTile}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('NewChat' as never)}
               >
-                <Feather name="send" size={18} color="#FFFFFF" />
+                <View style={[styles.actionIcon, { backgroundColor: 'rgba(0,61,122,0.1)' }]}>
+                  <Feather name="edit-3" size={18} color={colors.primary} />
+                </View>
+                <Text style={styles.actionLabel}>New chat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionTile}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('NewGroup' as never)}
+              >
+                <View style={[styles.actionIcon, { backgroundColor: 'rgba(15,118,110,0.12)' }]}>
+                  <Feather name="users" size={18} color="#0F766E" />
+                </View>
+                <Text style={styles.actionLabel}>New group</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionTile}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('BlockedUsers' as never)}
+              >
+                <View style={[styles.actionIcon, { backgroundColor: 'rgba(185,28,28,0.1)' }]}>
+                  <Feather name="slash" size={18} color="#B91C1C" />
+                </View>
+                <Text style={styles.actionLabel}>Blocked</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionTile}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('ChatHelp' as never)}
+              >
+                <View style={[styles.actionIcon, { backgroundColor: 'rgba(124,58,237,0.1)' }]}>
+                  <Feather name="help-circle" size={18} color="#7C3AED" />
+                </View>
+                <Text style={styles.actionLabel}>Help</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyCard}>
+              <View style={styles.emptyIconWrap}>
+                <Feather name="inbox" size={28} color={colors.primary} />
+              </View>
+              <Text style={styles.emptyTitle}>
+                {error ? 'Couldn’t load messages' : 'No conversations yet'}
+              </Text>
+              <Text style={styles.emptyBody}>
+                {error
+                  ? 'Pull down to try again, or start a new chat when you are back online.'
+                  : 'Start a direct message or create a group with your team.'}
+              </Text>
+              <TouchableOpacity
+                style={styles.emptyCta}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('NewChat' as never)}
+              >
+                <Feather name="plus" size={16} color="#FFFFFF" />
+                <Text style={styles.emptyCtaText}>Start a chat</Text>
+              </TouchableOpacity>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const unread = (item.unread_count || 0) > 0;
+            const isGroup = item.type === 'group';
+            const isAdmin =
+              !isGroup &&
+              item.participants?.some((p) => p.type === 'company_admin');
+            return (
+              <TouchableOpacity
+                style={[styles.convCard, unread && styles.convCardUnread]}
+                activeOpacity={0.88}
+                onPress={() =>
+                  navigation.navigate({
+                    name: 'ConversationThread',
+                    params: { conversationId: item.id, title: item.title },
+                  } as never)
+                }
+              >
+                <View style={[styles.avatar, { backgroundColor: toneForId(item.id) }]}>
+                  {isGroup ? (
+                    <Feather name="users" size={20} color="#FFFFFF" />
+                  ) : isAdmin ? (
+                    <Feather name="shield" size={20} color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.avatarInitials}>{initialsFromTitle(item.title)}</Text>
+                  )}
+                </View>
+                <View style={styles.convBody}>
+                  <View style={styles.convTop}>
+                    <Text
+                      style={[styles.convTitle, unread && styles.convTitleUnread]}
+                      numberOfLines={1}
+                    >
+                      {item.title}
+                    </Text>
+                    <Text style={[styles.convTime, unread && styles.convTimeUnread]}>
+                      {formatRelativeTime(item.last_message_at || item.last_message?.created_at)}
+                    </Text>
+                  </View>
+                  <View style={styles.convBottom}>
+                    <Text
+                      style={[styles.convPreview, unread && styles.convPreviewUnread]}
+                      numberOfLines={1}
+                    >
+                      {previewText(item)}
+                    </Text>
+                    {unread ? (
+                      <View style={styles.badge}>
+                        <Text style={styles.badgeText}>
+                          {item.unread_count > 99 ? '99+' : item.unread_count}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Feather name="chevron-right" size={16} color="#CBD5E1" />
+                    )}
+                  </View>
+                  <View style={styles.chipRow}>
+                    <View style={[styles.typeChip, isGroup ? styles.typeChipGroup : styles.typeChipDirect]}>
+                      <Text style={[styles.typeChipText, isGroup ? styles.typeChipTextGroup : styles.typeChipTextDirect]}>
+                        {isGroup ? 'Group' : isAdmin ? 'Admin' : 'Direct'}
+                      </Text>
+                    </View>
+                    {item.block_status === 'blocked_by_me' || item.block_status === 'blocked_me' ? (
+                      <View style={styles.blockedChip}>
+                        <Text style={styles.blockedChipText}>Blocked</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+        />
+      )}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#F0F2F5' },
+  policyScroll: { flex: 1 },
+  centerFill: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+  },
+  loadingHint: {
+    fontFamily: fontFamily.medium,
+    fontSize: 14,
+    color: colors.text.secondary,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.xxxl,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  actionTile: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.04)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  actionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionLabel: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 11,
+    color: colors.text.primary,
+    textAlign: 'center',
+  },
+  convCard: {
+    marginHorizontal: spacing.xxxl,
+    marginBottom: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    padding: spacing.lg,
+    flexDirection: 'row',
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.05)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  convCardUnread: {
+    borderColor: 'rgba(0,61,122,0.18)',
+    backgroundColor: '#F8FBFF',
+  },
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarInitials: {
+    fontFamily: fontFamily.bold,
+    fontSize: 16,
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  convBody: { flex: 1, minWidth: 0 },
+  convTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  convTitle: {
+    flex: 1,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 16,
+    color: colors.text.primary,
+    lineHeight: 22,
+  },
+  convTitleUnread: {
+    fontFamily: fontFamily.bold,
+  },
+  convTime: {
+    fontFamily: fontFamily.medium,
+    fontSize: 12,
+    color: colors.text.secondary,
+  },
+  convTimeUnread: {
+    color: colors.primary,
+    fontFamily: fontFamily.semiBold,
+  },
+  convBottom: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  convPreview: {
+    flex: 1,
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.text.secondary,
+  },
+  convPreviewUnread: {
+    color: colors.text.primary,
+    fontFamily: fontFamily.medium,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    marginTop: spacing.sm,
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  typeChip: {
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  typeChipDirect: { backgroundColor: '#EFF6FF' },
+  typeChipGroup: { backgroundColor: '#ECFDF5' },
+  typeChipText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  typeChipTextDirect: { color: colors.primary },
+  typeChipTextGroup: { color: '#0F766E' },
+  blockedChip: {
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+  },
+  blockedChipText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    color: '#B91C1C',
+  },
+  badge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontFamily: fontFamily.bold,
+    fontSize: 11,
+  },
+  emptyCard: {
+    marginHorizontal: spacing.xxxl,
+    marginTop: spacing.sm,
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    paddingVertical: spacing.xxxl,
+    paddingHorizontal: spacing.xxl,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.05)',
+  },
+  emptyIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,61,122,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.lg,
+  },
+  emptyTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: 18,
+    color: colors.text.primary,
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  emptyBody: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.text.secondary,
+    textAlign: 'center',
+  },
+  emptyCta: {
+    marginTop: spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+  },
+  emptyCtaText: {
+    fontFamily: fontFamily.bold,
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+});
