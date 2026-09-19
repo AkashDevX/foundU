@@ -403,11 +403,13 @@ export function mapMePayloadToUserProfile(
       'shift_end',
       'assignedShiftEndTime',
     ) ?? pickString(assignmentShift ?? {}, 'end_time'),
+    assignedWorkLocationId:
+      pickString(row, 'assigned_work_location_id', 'assignedWorkLocationId') ??
+      pickString(assignmentLocation ?? {}, 'id'),
     assignedWorkLocationName: pickString(
       row,
       'assigned_work_location_name',
       'work_location_name',
-      'work_location',
       'assignedWorkLocationName',
     ) ?? pickString(assignmentLocation ?? {}, 'name'),
     assignedWorkLocationAddress: pickString(
@@ -417,12 +419,13 @@ export function mapMePayloadToUserProfile(
       'work_address',
       'assignedWorkLocationAddress',
     ) ?? pickString(assignmentLocation ?? {}, 'address'),
+    // Prefer explicit assignment keys — never read root `latitude`/`longitude`, which can
+    // collide with unrelated payload fields and leave the site label out of sync with the map.
     assignedWorkLocationLat: pickString(
       row,
       'assigned_work_location_lat',
       'work_location_lat',
       'work_location_latitude',
-      'latitude',
       'assignedWorkLocationLat',
     ) ?? pickString(assignmentLocation ?? {}, 'latitude', 'lat', 'work_location_lat'),
     assignedWorkLocationLng: pickString(
@@ -430,7 +433,6 @@ export function mapMePayloadToUserProfile(
       'assigned_work_location_lng',
       'work_location_lng',
       'work_location_longitude',
-      'longitude',
       'assignedWorkLocationLng',
     ) ?? pickString(assignmentLocation ?? {}, 'longitude', 'lng', 'lon', 'work_location_lng'),
     assignedDepartmentCode:
@@ -617,9 +619,47 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
       /* cache is best-effort */
     }
     return result;
-  })().finally(() => {
-    profileRefreshInFlight = null;
-  });
+  }
+  try {
+    const existing = await loadAccountProfile();
+    const apiPhoto = result.profile.profilePhotoUrl;
+    const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
 
-  return profileRefreshInFlight;
+    // Strip any previously cached work-location fields first so a missing/changed site
+    // cannot leave the old name on screen after refresh.
+    const {
+      assignedWorkLocationId: _oldLocId,
+      assignedWorkLocationName: _oldLocName,
+      assignedWorkLocationAddress: _oldLocAddress,
+      assignedWorkLocationLat: _oldLocLat,
+      assignedWorkLocationLng: _oldLocLng,
+      assignedWorkLocationNotes: _oldLocNotes,
+      ...existingWithoutLocation
+    } = existing;
+
+    const merged: UserProfileSnapshot = {
+      ...existingWithoutLocation,
+      ...Object.fromEntries(
+        Object.entries(result.profile).filter(([, value]) => value !== undefined),
+      ),
+      companySlug: result.profile.companySlug ?? existing.companySlug,
+      registrationCompanySlug:
+        result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
+      profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
+      profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
+      assignedWorkLocationId: result.profile.assignedWorkLocationId ?? null,
+      assignedWorkLocationName: result.profile.assignedWorkLocationName ?? null,
+      assignedWorkLocationAddress: result.profile.assignedWorkLocationAddress ?? null,
+      assignedWorkLocationLat: result.profile.assignedWorkLocationLat ?? null,
+      assignedWorkLocationLng: result.profile.assignedWorkLocationLng ?? null,
+      assignedWorkLocationNotes: result.profile.assignedWorkLocationNotes ?? null,
+    };
+    const { password: _p, password_confirmation: _c, ...safe } = merged;
+    await saveAccountProfile(safe);
+    notifyAssignmentChange({ profile: safe, source: 'refresh' });
+    return { ...result, profile: safe };
+  } catch {
+    /* cache is best-effort */
+  }
+  return result;
 }

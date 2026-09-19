@@ -15,10 +15,12 @@ export type UserProfileSnapshot = {
   assignedShiftDate?: string;
   assignedShiftStartTime?: string;
   assignedShiftEndTime?: string;
-  assignedWorkLocationName?: string;
-  assignedWorkLocationAddress?: string;
-  assignedWorkLocationLat?: string;
-  assignedWorkLocationLng?: string;
+  /** Tenant `work_locations.id` for the assigned site (null when cleared). */
+  assignedWorkLocationId?: string | null;
+  assignedWorkLocationName?: string | null;
+  assignedWorkLocationAddress?: string | null;
+  assignedWorkLocationLat?: string | null;
+  assignedWorkLocationLng?: string | null;
   /** Department code from roster (tenant `departments.code`). */
   assignedDepartmentCode?: string;
   /** Shift template breaks line from tenant `shifts.breaks_summary`. */
@@ -28,7 +30,7 @@ export type UserProfileSnapshot = {
   /** Shift template notes from tenant `shifts.notes`. */
   assignedShiftNotes?: string;
   /** Site / location notes from tenant `work_locations.notes`. */
-  assignedWorkLocationNotes?: string;
+  assignedWorkLocationNotes?: string | null;
   /** Administrator notes on the employee assignment (`employees.assignment_notes`). */
   assignmentNotes?: string;
   /** Tenant employee row — useful for status badges. */
