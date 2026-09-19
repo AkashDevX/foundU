@@ -147,20 +147,21 @@ export async function startChatPush(): Promise<void> {
   }
 }
 
-/** Call on logout — removes this device token from the server. */
-export async function stopChatPush(): Promise<void> {
-  try {
-    const fb = loadMessaging();
-    if (fb) {
-      const token = await fb.getToken(fb.getMessaging());
-      await unregisterDeviceToken(token || undefined);
-    } else {
-      await unregisterDeviceToken();
-    }
-  } catch {
-    await unregisterDeviceToken();
-  }
+function withBudget<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([
+    promise.then(
+      (value) => value,
+      () => undefined,
+    ),
+    new Promise<undefined>((resolve) => {
+      setTimeout(() => resolve(undefined), ms);
+    }),
+  ]);
+}
 
+/** Call on logout — removes this device token from the server (best-effort, time-capped). */
+export async function stopChatPush(): Promise<void> {
+  // Always drop local listeners first so logout cannot leave push handlers active.
   tokenRefreshUnsub?.();
   openedUnsub?.();
   foregroundUnsub?.();
@@ -169,4 +170,16 @@ export async function stopChatPush(): Promise<void> {
   foregroundUnsub = null;
   started = false;
   activeConversationId = null;
+
+  try {
+    const fb = loadMessaging();
+    if (fb) {
+      const token = await withBudget(fb.getToken(fb.getMessaging()), 800);
+      await withBudget(unregisterDeviceToken(token || undefined), 1200);
+    } else {
+      await withBudget(unregisterDeviceToken(), 1200);
+    }
+  } catch {
+    await withBudget(unregisterDeviceToken(), 800);
+  }
 }

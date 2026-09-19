@@ -67,11 +67,16 @@ export async function unregisterDeviceToken(token?: string): Promise<ApiOk | Api
   const auth = await tenantAuthHeaders();
   if (!auth.ok) return auth;
   try {
-    const res = await fetchWithTimeout(`${API_BASE_URL}/api/v1/device-token`, {
-      method: 'DELETE',
-      headers: auth.headers,
-      body: JSON.stringify(token ? { token } : {}),
-    });
+    // Keep logout snappy — one short attempt is enough; failure is best-effort.
+    const res = await fetchWithTimeout(
+      `${API_BASE_URL}/api/v1/device-token`,
+      {
+        method: 'DELETE',
+        headers: auth.headers,
+        body: JSON.stringify(token ? { token } : {}),
+      },
+      { timeoutMs: 4_000, retries: 0 },
+    );
     if (!res.ok) {
       return { ok: false, message: 'Could not unregister device token.' };
     }

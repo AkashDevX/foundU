@@ -152,7 +152,7 @@ function ShiftInfoRow({
   );
 }
 
-function NotesSection({ title, body }: { title: string; body: string | undefined }) {
+function NotesSection({ title, body }: { title: string; body: string | null | undefined }) {
   if (!body || body.trim() === '') return null;
   return (
     <View style={s.notesSection}>

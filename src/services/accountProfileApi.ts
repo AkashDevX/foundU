@@ -590,9 +590,21 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
       const existing = await loadAccountProfile();
       const apiPhoto = result.profile.profilePhotoUrl;
       const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
-      // Don't let undefined API fields wipe previously known assignment coords/name.
+
+      // Strip any previously cached work-location fields first so a missing/changed site
+      // cannot leave the old name on screen after refresh.
+      const {
+        assignedWorkLocationId: _oldLocId,
+        assignedWorkLocationName: _oldLocName,
+        assignedWorkLocationAddress: _oldLocAddress,
+        assignedWorkLocationLat: _oldLocLat,
+        assignedWorkLocationLng: _oldLocLng,
+        assignedWorkLocationNotes: _oldLocNotes,
+        ...existingWithoutLocation
+      } = existing;
+
       const merged: UserProfileSnapshot = {
-        ...existing,
+        ...existingWithoutLocation,
         ...Object.fromEntries(
           Object.entries(result.profile).filter(([, value]) => value !== undefined),
         ),
@@ -601,15 +613,12 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
           result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
         profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
         profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
-        // If the server sent a new location name/coords, keep them; otherwise preserve cache.
-        assignedWorkLocationName:
-          result.profile.assignedWorkLocationName ?? existing.assignedWorkLocationName,
-        assignedWorkLocationAddress:
-          result.profile.assignedWorkLocationAddress ?? existing.assignedWorkLocationAddress,
-        assignedWorkLocationLat:
-          result.profile.assignedWorkLocationLat ?? existing.assignedWorkLocationLat,
-        assignedWorkLocationLng:
-          result.profile.assignedWorkLocationLng ?? existing.assignedWorkLocationLng,
+        assignedWorkLocationId: result.profile.assignedWorkLocationId ?? null,
+        assignedWorkLocationName: result.profile.assignedWorkLocationName ?? null,
+        assignedWorkLocationAddress: result.profile.assignedWorkLocationAddress ?? null,
+        assignedWorkLocationLat: result.profile.assignedWorkLocationLat ?? null,
+        assignedWorkLocationLng: result.profile.assignedWorkLocationLng ?? null,
+        assignedWorkLocationNotes: result.profile.assignedWorkLocationNotes ?? null,
       };
       const { password: _p, password_confirmation: _c, ...safe } = merged;
       await saveAccountProfile(safe);
@@ -619,47 +628,9 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
       /* cache is best-effort */
     }
     return result;
-  }
-  try {
-    const existing = await loadAccountProfile();
-    const apiPhoto = result.profile.profilePhotoUrl;
-    const hasServerPhoto = typeof apiPhoto === 'string' && apiPhoto.trim() !== '';
+  })().finally(() => {
+    profileRefreshInFlight = null;
+  });
 
-    // Strip any previously cached work-location fields first so a missing/changed site
-    // cannot leave the old name on screen after refresh.
-    const {
-      assignedWorkLocationId: _oldLocId,
-      assignedWorkLocationName: _oldLocName,
-      assignedWorkLocationAddress: _oldLocAddress,
-      assignedWorkLocationLat: _oldLocLat,
-      assignedWorkLocationLng: _oldLocLng,
-      assignedWorkLocationNotes: _oldLocNotes,
-      ...existingWithoutLocation
-    } = existing;
-
-    const merged: UserProfileSnapshot = {
-      ...existingWithoutLocation,
-      ...Object.fromEntries(
-        Object.entries(result.profile).filter(([, value]) => value !== undefined),
-      ),
-      companySlug: result.profile.companySlug ?? existing.companySlug,
-      registrationCompanySlug:
-        result.profile.registrationCompanySlug ?? existing.registrationCompanySlug,
-      profilePhotoUrl: hasServerPhoto ? apiPhoto.trim() : existing.profilePhotoUrl,
-      profilePhotoLocalUri: hasServerPhoto ? null : existing.profilePhotoLocalUri,
-      assignedWorkLocationId: result.profile.assignedWorkLocationId ?? null,
-      assignedWorkLocationName: result.profile.assignedWorkLocationName ?? null,
-      assignedWorkLocationAddress: result.profile.assignedWorkLocationAddress ?? null,
-      assignedWorkLocationLat: result.profile.assignedWorkLocationLat ?? null,
-      assignedWorkLocationLng: result.profile.assignedWorkLocationLng ?? null,
-      assignedWorkLocationNotes: result.profile.assignedWorkLocationNotes ?? null,
-    };
-    const { password: _p, password_confirmation: _c, ...safe } = merged;
-    await saveAccountProfile(safe);
-    notifyAssignmentChange({ profile: safe, source: 'refresh' });
-    return { ...result, profile: safe };
-  } catch {
-    /* cache is best-effort */
-  }
-  return result;
+  return profileRefreshInFlight;
 }
