@@ -282,7 +282,49 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   }, [assignedCoords, timeClockStatus?.open_session]);
 
   const mapTargetCoords = geofenceSiteCoords ?? userCoords;
-  const mapTargetAddress = assignmentProfile?.assignedWorkLocationAddress ?? locationAddress;
+
+  const assignedSiteName = assignmentProfile?.assignedWorkLocationName?.trim() || null;
+  const assignedSiteAddress = assignmentProfile?.assignedWorkLocationAddress?.trim() || null;
+  const siteLatKey = geofenceSiteCoords ? geofenceSiteCoords.lat.toFixed(6) : null;
+  const siteLngKey = geofenceSiteCoords ? geofenceSiteCoords.lng.toFixed(6) : null;
+
+  // Always reverse-geocode the pin on the map. The admin "Name" / saved address can lag
+  // behind a moved pin; this keeps the visible label in sync with OpenStreetMap + zone.
+  const [siteAddressFromCoords, setSiteAddressFromCoords] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (siteLatKey == null || siteLngKey == null || !geofenceSiteCoords) {
+      setSiteAddressFromCoords(null);
+      return;
+    }
+
+    let cancelled = false;
+    void reverseGeocode(geofenceSiteCoords.lat, geofenceSiteCoords.lng)
+      .then((address) => {
+        if (!cancelled) {
+          setSiteAddressFromCoords(address);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSiteAddressFromCoords(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [siteLatKey, siteLngKey, geofenceSiteCoords]);
+
+  // Prefer live pin address; fall back to saved assignment address only while geocode loads.
+  const mapTargetAddress = geofenceSiteCoords
+    ? siteAddressFromCoords || assignedSiteAddress
+    : locationAddress;
+
+  // Heading follows the place on the map (not a stale catalog name after a pin move).
+  const siteDisplayName = geofenceSiteCoords
+    ? (mapTargetAddress ? shortLocationLabel(mapTargetAddress) : assignedSiteName)
+    : locationLabel;
 
   const distanceToSiteM = useMemo(() => {
     if (!userCoords || !geofenceSiteCoords) return null;
@@ -728,6 +770,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           const next = api.profile;
           if (
             prev &&
+            prev.assignedWorkLocationId === next.assignedWorkLocationId &&
             prev.assignedWorkLocationLat === next.assignedWorkLocationLat &&
             prev.assignedWorkLocationLng === next.assignedWorkLocationLng &&
             prev.assignedWorkLocationName === next.assignedWorkLocationName &&
@@ -1205,14 +1248,16 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
             </View>
           )}
 
-          {mapTargetAddress && !locationLoading && !locationError && (
+          {(mapTargetAddress || siteDisplayName || mapTargetCoords) &&
+            !locationLoading &&
+            !locationError && (
             <>
-              {assignmentProfile?.assignedWorkLocationName ? (
-                <Text style={styles.locationShortName}>{assignmentProfile.assignedWorkLocationName}</Text>
-              ) : locationLabel ? (
-                <Text style={styles.locationShortName}>{locationLabel}</Text>
+              {siteDisplayName ? (
+                <Text style={styles.locationShortName}>{siteDisplayName}</Text>
               ) : null}
-              <Text style={styles.locationAddress}>{mapTargetAddress}</Text>
+              {mapTargetAddress ? (
+                <Text style={styles.locationAddress}>{mapTargetAddress}</Text>
+              ) : null}
               {mapTargetCoords ? (
                 <View style={styles.locationCoordsRow}>
                   <Feather name="map-pin" size={14} color={colors.primary} />
