@@ -183,3 +183,128 @@ export async function postBreakIn(coords: DeviceCoordinates): Promise<TimeClockP
 export async function postBreakOut(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
   return postTimeClockPunch('break-end', coords);
 }
+
+export type IdleAlertPayload = {
+  id: number;
+  clock_in_entry_id: number;
+  started_at: string | null;
+  detected_at: string | null;
+  idle_minutes: number;
+  center_latitude: number | null;
+  center_longitude: number | null;
+  max_displacement_meters: number | null;
+  status: string;
+  employee_acknowledged_at: string | null;
+  message: string;
+};
+
+export type LocationPingResult =
+  | {
+      ok: true;
+      message: string;
+      throttled: boolean;
+      idle_alert: IdleAlertPayload | null;
+    }
+  | { ok: false; message: string; code?: string };
+
+function mapIdleAlert(raw: unknown): IdleAlertPayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = Number(o.id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return {
+    id,
+    clock_in_entry_id: Number(o.clock_in_entry_id) || 0,
+    started_at: typeof o.started_at === 'string' ? o.started_at : null,
+    detected_at: typeof o.detected_at === 'string' ? o.detected_at : null,
+    idle_minutes: Number(o.idle_minutes) || 0,
+    center_latitude: o.center_latitude != null ? Number(o.center_latitude) : null,
+    center_longitude: o.center_longitude != null ? Number(o.center_longitude) : null,
+    max_displacement_meters:
+      o.max_displacement_meters != null ? Number(o.max_displacement_meters) : null,
+    status: typeof o.status === 'string' ? o.status : 'open',
+    employee_acknowledged_at:
+      typeof o.employee_acknowledged_at === 'string' ? o.employee_acknowledged_at : null,
+    message:
+      typeof o.message === 'string' && o.message.trim() !== ''
+        ? o.message.trim()
+        : 'Little movement detected. Please confirm you are still working.',
+  };
+}
+
+export async function postLocationPing(coords: DeviceCoordinates): Promise<LocationPingResult> {
+  const auth = await tenantAuthHeaders();
+  if (!auth.ok) return auth;
+
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/time-clock/location-ping`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy_meters: coords.accuracy_meters ?? null,
+      }),
+    });
+  } catch {
+    return {
+      ok: false,
+      message: `Could not reach the server at ${API_BASE_URL}.`,
+    };
+  }
+
+  const raw = await res.text();
+  const parsed = tryParseApiJson(raw);
+
+  if (!res.ok) {
+    const err = formatApiError(parsed, raw, res.status);
+    return { ok: false, message: err.message, code: err.code };
+  }
+
+  const body = (parsed && typeof parsed === 'object' ? parsed : {}) as {
+    message?: string;
+    throttled?: boolean;
+    idle_alert?: unknown;
+  };
+
+  return {
+    ok: true,
+    message: typeof body.message === 'string' ? body.message : 'Location ping recorded.',
+    throttled: Boolean(body.throttled),
+    idle_alert: mapIdleAlert(body.idle_alert),
+  };
+}
+
+export async function acknowledgeIdleAlert(
+  idleAlertId: number,
+): Promise<{ ok: true; idle_alert: IdleAlertPayload | null } | { ok: false; message: string }> {
+  const auth = await tenantAuthHeaders();
+  if (!auth.ok) return auth;
+
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/time-clock/idle-alert/acknowledge`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ idle_alert_id: idleAlertId }),
+    });
+  } catch {
+    return { ok: false, message: `Could not reach the server at ${API_BASE_URL}.` };
+  }
+
+  const raw = await res.text();
+  const parsed = tryParseApiJson(raw);
+
+  if (!res.ok) {
+    const err = formatApiError(parsed, raw, res.status);
+    return { ok: false, message: err.message };
+  }
+
+  const body = (parsed && typeof parsed === 'object' ? parsed : {}) as { idle_alert?: unknown };
+  return { ok: true, idle_alert: mapIdleAlert(body.idle_alert) };
+}

@@ -29,6 +29,7 @@ import { dashboardStyles } from '../../styles/styles';
 import { colors, spacing } from '../../theme/theme';
 import { API_BASE_URL } from '../../config/api';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
+import { MainTabHeaderRight } from '../../components/HeaderIncidentReportButton';
 import { getDisplayProfilePhotoUri, loadAccountProfile, welcomeDisplayName } from '../../services/accountProfileStorage';
 import { refreshAndCacheAccountProfileFromApi } from '../../services/accountProfileApi';
 import { subscribeAssignmentChange } from '../../services/assignmentEvents';
@@ -1067,14 +1068,16 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           </View>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>CruLynk</Text>
-        <TouchableOpacity
-          style={styles.bellBtn}
-          activeOpacity={0.7}
-          onPress={openLogoutSweetAlert}
-          accessibilityLabel="Log out"
-        >
-          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
-        </TouchableOpacity>
+        <MainTabHeaderRight>
+          <TouchableOpacity
+            style={styles.bellBtn}
+            activeOpacity={0.7}
+            onPress={openLogoutSweetAlert}
+            accessibilityLabel="Log out"
+          >
+            <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+          </TouchableOpacity>
+        </MainTabHeaderRight>
       </View>
 
       <ScrollView

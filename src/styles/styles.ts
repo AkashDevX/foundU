@@ -552,6 +552,11 @@ export const dashboardStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,61,122,0.08)',
   },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   greetingCard: {
     marginTop: spacing.sm,
     marginBottom: spacing.lg,

@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
+import { MainTabHeaderRight } from '../../components/HeaderIncidentReportButton';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles } from '../../styles/styles';
 import { colors, fontFamily, spacing } from '../../theme/theme';
@@ -176,25 +177,27 @@ export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
           </View>
         </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Messages</Text>
-        {policyAccepted ? (
-          <TouchableOpacity
-            style={headerStyles.bellBtn}
-            activeOpacity={0.7}
-            onPress={openLogoutSweetAlert}
-            accessibilityLabel="Log out"
-          >
-            <Feather name="log-out" size={24} color={colors.primary} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={headerStyles.bellBtn}
-            activeOpacity={0.7}
-            onPress={() => navigation.navigate('ChatHelp' as never)}
-            accessibilityLabel="Help"
-          >
-            <Feather name="help-circle" size={24} color={colors.primary} />
-          </TouchableOpacity>
-        )}
+        <MainTabHeaderRight>
+          {policyAccepted ? (
+            <TouchableOpacity
+              style={headerStyles.bellBtn}
+              activeOpacity={0.7}
+              onPress={openLogoutSweetAlert}
+              accessibilityLabel="Log out"
+            >
+              <Feather name="log-out" size={24} color={colors.primary} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={headerStyles.bellBtn}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('ChatHelp' as never)}
+              accessibilityLabel="Help"
+            >
+              <Feather name="help-circle" size={24} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+        </MainTabHeaderRight>
       </View>
 
       {policyLoading ? (

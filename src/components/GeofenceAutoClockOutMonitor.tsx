@@ -19,10 +19,13 @@ import {
   stopNativeLocationMonitoring,
 } from '../services/locationMonitorNative';
 import {
+  acknowledgeIdleAlert,
   fetchTimeClockStatus,
   postAutoClockOut,
+  postLocationPing,
   resolveGeofenceRadiusM,
   resolveGeofenceSiteCoords,
+  type IdleAlertPayload,
   type TimeClockStatus,
 } from '../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../services/timeClockEvents';
@@ -32,6 +35,13 @@ import {
   isOutsideGeofence,
   type LatLng,
 } from '../utils/geofence';
+import {
+  isLocallyIdle,
+  LOCATION_PING_MIN_INTERVAL_MS,
+  pruneSamples,
+  sampleFromCoords,
+  type LocationSamplePoint,
+} from '../utils/locationTracking';
 
 /** How often we re-hit `/me` for assignment coords (time-clock already covers punch state). */
 const PROFILE_REFRESH_INTERVAL_MS = 60_000;
@@ -84,9 +94,19 @@ export function GeofenceAutoClockOutMonitor() {
     title: string;
     message: string;
   } | null>(null);
+  const [idleAlert, setIdleAlert] = useState<{
+    title: string;
+    message: string;
+    alertId: number | null;
+  } | null>(null);
 
   const monitoringRef = useRef(false);
   const autoClockOutInFlightRef = useRef(false);
+  const pingInFlightRef = useRef(false);
+  const lastPingAtRef = useRef(0);
+  const localSamplesRef = useRef<LocationSamplePoint[]>([]);
+  const shownIdleAlertIdsRef = useRef<Set<number>>(new Set());
+  const localIdleShownRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clockStateRef = useRef<{
@@ -102,6 +122,34 @@ export function GeofenceAutoClockOutMonitor() {
   const showAutoClockOutAlert = useCallback((title: string, message: string) => {
     setAutoClockOutAlert({ title, message });
   }, []);
+
+  const showIdleMovementAlert = useCallback((message: string, alertId: number | null) => {
+    if (alertId != null) {
+      if (shownIdleAlertIdsRef.current.has(alertId)) return;
+      shownIdleAlertIdsRef.current.add(alertId);
+    } else if (localIdleShownRef.current) {
+      return;
+    } else {
+      localIdleShownRef.current = true;
+    }
+    setIdleAlert({
+      title: 'Little movement detected',
+      message,
+      alertId,
+    });
+  }, []);
+
+  const dismissIdleAlert = useCallback(async () => {
+    const current = idleAlert;
+    setIdleAlert(null);
+    if (current?.alertId != null) {
+      try {
+        await acknowledgeIdleAlert(current.alertId);
+      } catch {
+        /* non-blocking */
+      }
+    }
+  }, [idleAlert]);
 
   const loadPendingAlert = useCallback(async () => {
     const pending = await consumePendingAutoClockOutAlert();
@@ -120,8 +168,60 @@ export function GeofenceAutoClockOutMonitor() {
       pollTimerRef.current = null;
     }
     monitoringRef.current = false;
+    localSamplesRef.current = [];
+    localIdleShownRef.current = false;
     void stopNativeLocationMonitoring();
   }, []);
+
+  const trackLocationSample = useCallback(
+    async (lat: number, lng: number, accuracyMeters: number | null) => {
+      if (!clockStateRef.current.isClockedIn) return;
+
+      const now = Date.now();
+      localSamplesRef.current = pruneSamples([
+        ...localSamplesRef.current,
+        sampleFromCoords(lat, lng, accuracyMeters, now),
+      ], now);
+
+      const local = isLocallyIdle(localSamplesRef.current, now);
+      if (local.idle) {
+        showIdleMovementAlert(
+          `Little movement detected for about ${local.idleMinutes} minutes. Please confirm you are still working.`,
+          null,
+        );
+      } else {
+        localIdleShownRef.current = false;
+      }
+
+      if (pingInFlightRef.current || now - lastPingAtRef.current < LOCATION_PING_MIN_INTERVAL_MS) {
+        return;
+      }
+
+      pingInFlightRef.current = true;
+      lastPingAtRef.current = now;
+      try {
+        const result = await postLocationPing({
+          latitude: lat,
+          longitude: lng,
+          accuracy_meters: accuracyMeters,
+        });
+        if (!result.ok) {
+          if (result.code === 'not_clocked_in') {
+            clockStateRef.current.isClockedIn = false;
+            clearWatch();
+          }
+          return;
+        }
+        if (result.idle_alert) {
+          const alert: IdleAlertPayload = result.idle_alert;
+          showIdleMovementAlert(alert.message, alert.id);
+        }
+      } finally {
+        pingInFlightRef.current = false;
+      }
+    },
+    [clearWatch, showIdleMovementAlert],
+  );
 
   const handleAutoClockOutSuccess = useCallback(
     async (timeClock: TimeClockStatus, message: string) => {
@@ -156,6 +256,9 @@ export function GeofenceAutoClockOutMonitor() {
         return;
       }
 
+      // Mid-shift tracking (ping + idle) — does not affect leave-site auto clock-out.
+      void trackLocationSample(lat, lng, accuracyMeters);
+
       // Same rule as Dashboard "Out of range" badge.
       if (!isOutsideGeofence({ lat, lng }, siteCoords, radiusM, accuracyMeters)) {
         return;
@@ -182,7 +285,7 @@ export function GeofenceAutoClockOutMonitor() {
         autoClockOutInFlightRef.current = false;
       }
     },
-    [clearWatch, handleAutoClockOutSuccess],
+    [clearWatch, handleAutoClockOutSuccess, trackLocationSample],
   );
 
   const readCurrentPosition = useCallback(async () => {
@@ -392,16 +495,29 @@ export function GeofenceAutoClockOutMonitor() {
   ]);
 
   return (
-    <SweetAlert
-      visible={autoClockOutAlert !== null}
-      title={autoClockOutAlert?.title ?? ''}
-      message={autoClockOutAlert?.message ?? ''}
-      confirmText="OK"
-      cancelText="Cancel"
-      hideCancel
-      variant="warning"
-      onClose={() => setAutoClockOutAlert(null)}
-      onConfirm={() => setAutoClockOutAlert(null)}
-    />
+    <>
+      <SweetAlert
+        visible={autoClockOutAlert !== null}
+        title={autoClockOutAlert?.title ?? ''}
+        message={autoClockOutAlert?.message ?? ''}
+        confirmText="OK"
+        cancelText="Cancel"
+        hideCancel
+        variant="warning"
+        onClose={() => setAutoClockOutAlert(null)}
+        onConfirm={() => setAutoClockOutAlert(null)}
+      />
+      <SweetAlert
+        visible={idleAlert !== null && autoClockOutAlert === null}
+        title={idleAlert?.title ?? ''}
+        message={idleAlert?.message ?? ''}
+        confirmText="I'm still working"
+        cancelText="Cancel"
+        hideCancel
+        variant="info"
+        onClose={() => void dismissIdleAlert()}
+        onConfirm={() => void dismissIdleAlert()}
+      />
+    </>
   );
 }

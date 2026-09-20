@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
+import { MainTabHeaderRight } from '../../components/HeaderIncidentReportButton';
 import { dashboardStyles, tasksStyles } from '../../styles/styles';
 import { colors, fontFamily, spacing } from '../../theme/theme';
 import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage';
@@ -234,14 +235,16 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
           </View>
         </TouchableOpacity>
         <Text style={headerStyles.headerTitle}>Tasks</Text>
-        <TouchableOpacity
-          style={headerStyles.bellBtn}
-          activeOpacity={0.7}
-          onPress={openLogoutSweetAlert}
-          accessibilityLabel="Log out"
-        >
-          <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
-        </TouchableOpacity>
+        <MainTabHeaderRight>
+          <TouchableOpacity
+            style={headerStyles.bellBtn}
+            activeOpacity={0.7}
+            onPress={openLogoutSweetAlert}
+            accessibilityLabel="Log out"
+          >
+            <Feather name="log-out" size={24} color={colors.primary} strokeWidth={2} />
+          </TouchableOpacity>
+        </MainTabHeaderRight>
       </View>
 
       <ScrollView
