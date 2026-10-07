@@ -1,3 +1,10 @@
+/** One organisation chosen during Create Account (from GET /api/v1/bootstrap). */
+export type RegistrationCompany = {
+  slug: string;
+  appKey?: string | null;
+  name: string;
+};
+
 /**
  * Snapshot of registration / account fields shown on My Profile.
  * Filled from the Create Account wizard, `GET /api/v1/me`, and local cache.
@@ -8,6 +15,8 @@ export type UserProfileSnapshot = {
   registrationCompanySlug?: string | null;
   registrationCompanyAppKey?: string | null;
   companyName?: string | null;
+  /** All organisations the employee applied to during Create Account. */
+  registrationCompanies?: RegistrationCompany[];
   /** Assignment details from tenant/company DB (active employee roster). */
   assignedDepartment?: string;
   assignedShiftName?: string;

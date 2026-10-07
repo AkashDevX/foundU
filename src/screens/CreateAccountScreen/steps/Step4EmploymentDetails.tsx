@@ -31,8 +31,8 @@ import { TermsAndConditionsModal } from '../TermsAndConditionsModal';
 
 interface Step4EmploymentDetailsProps {
   onNext: RegistrationWizardNext;
-  /** Master DB company slug — used to load org-specific terms. */
-  companySlug: string | null;
+  /** Master DB company slugs — used to load each org's terms. */
+  companySlugs: string[];
   /** Increment when returning from a failed registration submit so password fields refocus. */
   focusPasswordSignal?: number;
   /** True while registration POST is running after tapping Complete. */
@@ -41,16 +41,13 @@ interface Step4EmploymentDetailsProps {
 
 export function Step4EmploymentDetails({
   onNext,
-  companySlug,
+  companySlugs,
   focusPasswordSignal = 0,
   isSubmitting = false,
 }: Step4EmploymentDetailsProps) {
   const { picklists, companies } = useAppBootstrap();
   const transportOptions = picklists.transport_mode ?? [];
-  const selectedCompanyName =
-    companySlug != null
-      ? (companies.find((c) => c.slug === companySlug)?.name ?? null)
-      : null;
+  const selectedCompanies = companies.filter((c) => companySlugs.includes(c.slug));
 
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
@@ -65,8 +62,8 @@ export function Step4EmploymentDetails({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [acceptedTermSlugs, setAcceptedTermSlugs] = useState<string[]>([]);
+  const [termsCompanySlug, setTermsCompanySlug] = useState<string | null>(null);
   const accountNameRef = useRef<TextInput>(null);
   const accountNumberRef = useRef<TextInput>(null);
   const bankNameRef = useRef<TextInput>(null);
@@ -92,8 +89,15 @@ export function Step4EmploymentDetails({
     return () => clearTimeout(id);
   }, [focusPasswordSignal]);
 
+  useEffect(() => {
+    setAcceptedTermSlugs((prev) => prev.filter((slug) => companySlugs.includes(slug)));
+  }, [companySlugs]);
+
   const isOwnVehicle = modeOfTransport === 'Own vehicle';
   const styles = createAccountScreenStyles;
+  const allTermsAccepted =
+    selectedCompanies.length > 0 && selectedCompanies.every((c) => acceptedTermSlugs.includes(c.slug));
+  const termsCompany = selectedCompanies.find((c) => c.slug === termsCompanySlug) ?? null;
 
   const step4Complete =
     !isBlank(accountName) &&
@@ -103,7 +107,7 @@ export function Step4EmploymentDetails({
     !isBlank(modeOfTransport) &&
     !isBlank(password) &&
     !isBlank(confirmPassword) &&
-    acceptedTerms &&
+    allTermsAccepted &&
     (!isOwnVehicle || (!isBlank(vehicleRegistration) && !isBlank(vehicleExpiry)));
 
   const vehicleExpiryMinDate = startOfToday();
@@ -137,7 +141,7 @@ export function Step4EmploymentDetails({
     }
     if (isBlank(password)) missing.push('Password');
     if (isBlank(confirmPassword)) missing.push('Confirm password');
-    if (!acceptedTerms) missing.push('Acceptance of Terms and conditions');
+    if (!allTermsAccepted) missing.push('Acceptance of Terms and conditions for each organisation');
 
     if (missing.length > 0) {
       setBlockingAlert({
@@ -186,7 +190,7 @@ export function Step4EmploymentDetails({
     vehicleInsuranceUri,
     isSubmitting,
     isOwnVehicle,
-    acceptedTerms,
+    allTermsAccepted,
   ]);
 
   const dismissAlert = useCallback(() => {
@@ -414,27 +418,39 @@ export function Step4EmploymentDetails({
             </TouchableOpacity>
           </Pressable>
 
-          <View style={styles.termsAcceptRow}>
-            <TouchableOpacity
-              style={[styles.termsCheckbox, acceptedTerms && styles.termsCheckboxChecked]}
-              onPress={() => setAcceptedTerms((v) => !v)}
-              activeOpacity={0.75}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: acceptedTerms }}
-              accessibilityLabel="Accept Terms and conditions"
-            >
-              {acceptedTerms ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
-            </TouchableOpacity>
-            <View style={styles.termsAcceptTextWrap}>
-              <Text style={styles.termsAcceptText}>
-                I accept the{' '}
-                <Text style={styles.termsLink} onPress={() => setShowTermsModal(true)}>
-                  Terms and conditions
-                </Text>
-                {' *'}
-              </Text>
-            </View>
-          </View>
+          <Text style={[styles.fieldLabel, { marginTop: spacing.xxl }]}>Terms and conditions *</Text>
+          <Text style={styles.fieldHint}>
+            Open and accept terms for every organisation you selected. Each company reviews your
+            application separately.
+          </Text>
+          {selectedCompanies.length === 0 ? (
+            <Text style={[styles.fieldHint, { marginTop: spacing.sm }]}>
+              Go back to step 1 and select at least one organisation.
+            </Text>
+          ) : (
+            selectedCompanies.map((org, idx) => {
+              const accepted = acceptedTermSlugs.includes(org.slug);
+              const isLast = idx === selectedCompanies.length - 1;
+              return (
+                <TouchableOpacity
+                  key={org.slug}
+                  style={[styles.termsOrgRow, isLast ? styles.termsOrgRowLast : null]}
+                  onPress={() => setTermsCompanySlug(org.slug)}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${accepted ? 'Accepted' : 'View'} terms for ${org.name}`}
+                >
+                  <View style={[styles.termsCheckbox, accepted && styles.termsCheckboxChecked]}>
+                    {accepted ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
+                  </View>
+                  <Text style={styles.termsOrgName} numberOfLines={2}>
+                    {org.name}
+                  </Text>
+                  <Text style={styles.termsOrgLink}>{accepted ? 'Accepted' : 'View terms'}</Text>
+                </TouchableOpacity>
+              );
+            })
+          )}
 
           <TouchableOpacity
             style={[styles.saveBtn, (isSubmitting || !step4Complete) && { opacity: 0.65 }]}
@@ -449,10 +465,17 @@ export function Step4EmploymentDetails({
       </ScrollView>
 
       <TermsAndConditionsModal
-        visible={showTermsModal}
-        onClose={() => setShowTermsModal(false)}
-        companySlug={companySlug}
-        companyName={selectedCompanyName}
+        visible={termsCompanySlug !== null}
+        onClose={() => setTermsCompanySlug(null)}
+        companySlug={termsCompany?.slug ?? termsCompanySlug}
+        companyName={termsCompany?.name ?? null}
+        onAccept={() => {
+          if (termsCompanySlug) {
+            setAcceptedTermSlugs((prev) =>
+              prev.includes(termsCompanySlug) ? prev : [...prev, termsCompanySlug],
+            );
+          }
+        }}
       />
 
       <SweetAlert

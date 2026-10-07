@@ -24,6 +24,8 @@ interface TermsAndConditionsModalProps {
   companySlug: string | null;
   /** Optional display name for the selected company. */
   companyName?: string | null;
+  /** When set, shows Accept so the wizard can require terms per organisation. */
+  onAccept?: () => void;
 }
 
 export function TermsAndConditionsModal({
@@ -31,6 +33,7 @@ export function TermsAndConditionsModal({
   onClose,
   companySlug,
   companyName = null,
+  onAccept,
 }: TermsAndConditionsModalProps) {
   const styles = createAccountScreenStyles;
   const [loading, setLoading] = useState(false);
@@ -122,9 +125,34 @@ export function TermsAndConditionsModal({
               )}
             </ScrollView>
 
-            <TouchableOpacity style={styles.termsModalCloseBtn} onPress={onClose} activeOpacity={0.85}>
-              <Text style={styles.termsModalCloseBtnText}>Close</Text>
-            </TouchableOpacity>
+            {onAccept ? (
+              <View style={styles.termsModalActions}>
+                <TouchableOpacity style={styles.termsModalSecondaryBtn} onPress={onClose} activeOpacity={0.85}>
+                  <Text style={styles.termsModalSecondaryBtnText}>Close</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.termsModalAcceptBtn,
+                    (loading || !!loadError) && styles.termsModalAcceptBtnDisabled,
+                  ]}
+                  onPress={() => {
+                    if (loading || loadError) {
+                      return;
+                    }
+                    onAccept();
+                    onClose();
+                  }}
+                  activeOpacity={0.85}
+                  disabled={loading || !!loadError}
+                >
+                  <Text style={styles.termsModalCloseBtnText}>Accept</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.termsModalCloseBtn} onPress={onClose} activeOpacity={0.85}>
+                <Text style={styles.termsModalCloseBtnText}>Close</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </TouchableWithoutFeedback>
       </Pressable>

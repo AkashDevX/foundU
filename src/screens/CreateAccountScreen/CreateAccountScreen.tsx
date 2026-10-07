@@ -7,13 +7,14 @@ import {
   Modal,
   Pressable,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { SweetAlert } from '../../components/SweetAlert';
 import { createAccountScreenStyles } from '../../styles/styles';
-import type { UserProfileSnapshot } from '../../types/userProfile';
+import type { RegistrationCompany, UserProfileSnapshot } from '../../types/userProfile';
 import {
   emptyRegistrationUploads,
   mergeRegistrationUploads,
@@ -23,7 +24,11 @@ import { loadAccountProfile, saveAccountProfile } from '../../services/accountPr
 import { API_BASE_URL } from '../../config/api';
 import { tryParseApiJson } from '../../utils/parseApiJson';
 import { fontFamily as themeFontFamily } from '../../theme/theme';
-import { submitFoundURegistration } from '../../services/registerAccountApi';
+import {
+  parseRegistrationApplicationResults,
+  submitFoundURegistrationApplications,
+  type RegistrationApplicationResult,
+} from '../../services/registerAccountApi';
 import { Step1PersonalProfile, Step2WorkEligibility, Step3Qualifications, Step4EmploymentDetails } from './steps';
 
 const STEPS = [
@@ -33,7 +38,54 @@ const STEPS = [
   { step: 4, label: 'Employment Details', progress: '100%' },
 ] as const;
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = STEPS.length;
+
+function joinOrgNames(names: string[]): string {
+  if (names.length === 0) {
+    return '';
+  }
+  if (names.length === 1) {
+    return names[0];
+  }
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
+
+function formatApplicationResultsMessage(results: RegistrationApplicationResult[], fallback: string): string {
+  const created = results.filter((r) => r.status === 'created');
+  const others = results.filter((r) => r.status !== 'created');
+  const createdNames = created.map((r) => r.name || r.slug);
+  const loginHint =
+    'Each organisation reviews independently. After an organisation approves you, sign in and pick that company.';
+
+  if (created.length === 0) {
+    return fallback;
+  }
+
+  const sent =
+    createdNames.length > 0
+      ? `Applications sent to ${joinOrgNames(createdNames)}.`
+      : 'Your applications have been sent.';
+
+  if (others.length === 0) {
+    return `${sent} ${loginHint}`;
+  }
+
+  const otherLines = others.map((r) => {
+    const label = r.name || r.slug;
+    if (r.status === 'already_applied') {
+      return `• ${label} — already has a pending application for this email.`;
+    }
+    if (r.status === 'already_registered') {
+      return `• ${label} — an account with this email already exists.`;
+    }
+    return `• ${label} — ${r.message?.trim() || 'could not accept this application.'}`;
+  });
+
+  return `${sent}\n\nCould not complete:\n${otherLines.join('\n')}\n\n${loginHint}`;
+}
 
 function formatRegistrationApiError(parsed: unknown, raw: string): string {
   if (parsed && typeof parsed === 'object' && 'errors' in parsed) {
@@ -71,14 +123,17 @@ export function CreateAccountScreen() {
   const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState(1);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  /** Master DB company slug (matches X-Company-Slug). */
-  const [companySlug, setCompanySlug] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState(
+    'Your application has been sent. Each organisation will review it independently. After an organisation approves you, sign in and pick that company.',
+  );
+  /** Master DB company slugs chosen on step 1. */
+  const [companySlugs, setCompanySlugs] = useState<string[]>([]);
   const profileSnapshotRef = useRef<Partial<UserProfileSnapshot>>({});
   const registrationUploadsRef = useRef<RegistrationUploads>(emptyRegistrationUploads());
   const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
   /** Increment after API failure so Step 4 can focus the password field again. */
   const [passwordFocusNonce, setPasswordFocusNonce] = useState(0);
-  /** True while POST /register is in flight (after Complete on step 4). */
+  /** True while POST /register-applications is in flight (after Complete on step 4). */
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const styles = createAccountScreenStyles;
@@ -109,14 +164,15 @@ export function CreateAccountScreen() {
       password?: string;
       password_confirmation?: string;
     };
-    const slug = snap.registrationCompanySlug ?? snap.companySlug ?? null;
+    const selected: RegistrationCompany[] =
+      snap.registrationCompanies?.filter((c) => typeof c.slug === 'string' && c.slug.trim() !== '') ?? [];
     const _pwd = snap.password?.trim();
     const _pc = snap.password_confirmation?.trim();
 
-    if (!slug) {
+    if (selected.length === 0) {
       openRegistrationAlert(
         'Company not selected',
-        'Pick an organization on step 1 (loaded from the server). Pull to refresh bootstrap or check API /bootstrap.',
+        'Pick at least one organization on step 1 (loaded from the server). Pull to refresh bootstrap or check API /bootstrap.',
         1,
         false,
       );
@@ -135,26 +191,34 @@ export function CreateAccountScreen() {
 
     setIsSubmitting(true);
     try {
-      const res = await submitFoundURegistration(
+      const res = await submitFoundURegistrationApplications(
         { ...snap, password: _pwd, password_confirmation: _pc },
-        slug,
+        selected.map((c) => ({ slug: c.slug, appKey: c.appKey })),
         registrationUploadsRef.current,
       );
       const raw = await res.text();
       const parsed = tryParseApiJson(raw);
+      const results = parseRegistrationApplicationResults(parsed);
+      const created = results.filter((r) => r.status === 'created');
+      const apiMessage =
+        parsed && typeof parsed === 'object' && 'message' in parsed && typeof (parsed as { message?: unknown }).message === 'string'
+          ? (parsed as { message: string }).message
+          : '';
 
-      if (!res.ok) {
+      if (!res.ok && created.length === 0) {
         const msg = formatRegistrationApiError(parsed, raw);
         openRegistrationAlert('Could not submit application', `${msg}\n\nAPI: ${API_BASE_URL}`, 4, true);
         return;
       }
 
+      setSuccessMessage(formatApplicationResultsMessage(results, apiMessage || 'Your applications have been sent.'));
       setShowSuccessModal(true);
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : String(e);
+      const slugs = selected.map((c) => c.slug).join(', ');
       openRegistrationAlert(
         'Network error',
-        `${errMsg}\n\nAPI: ${API_BASE_URL}\nSlug: ${slug}\n\nTips:\n• Run: php artisan serve (same port as api.ts)\n• Android emulator uses 10.0.2.2 → your PC\n• Physical device: set DEV_API_HOST_OVERRIDE in src/config/api.ts + serve --host=0.0.0.0`,
+        `${errMsg}\n\nAPI: ${API_BASE_URL}\nOrgs: ${slugs}\n\nTips:\n• Run: php artisan serve (same port as api.ts)\n• Android emulator uses 10.0.2.2 → your PC\n• Physical device: set DEV_API_HOST_OVERRIDE in src/config/api.ts + serve --host=0.0.0.0`,
         4,
         true,
       );
@@ -214,8 +278,8 @@ export function CreateAccountScreen() {
         return (
           <Step1PersonalProfile
             onNext={goNext}
-            companySlug={companySlug}
-            onCompanySlugChange={setCompanySlug}
+            companySlugs={companySlugs}
+            onCompanySlugsChange={setCompanySlugs}
             initialProfilePhotoUri={registrationUploadsRef.current.profilePhotoUri ?? null}
           />
         );
@@ -227,7 +291,7 @@ export function CreateAccountScreen() {
         return (
           <Step4EmploymentDetails
             onNext={goNext}
-            companySlug={companySlug}
+            companySlugs={companySlugs}
             focusPasswordSignal={passwordFocusNonce}
             isSubmitting={isSubmitting}
           />
@@ -236,8 +300,8 @@ export function CreateAccountScreen() {
         return (
           <Step1PersonalProfile
             onNext={goNext}
-            companySlug={companySlug}
-            onCompanySlugChange={setCompanySlug}
+            companySlugs={companySlugs}
+            onCompanySlugsChange={setCompanySlugs}
             initialProfilePhotoUri={registrationUploadsRef.current.profilePhotoUri ?? null}
           />
         );
@@ -302,7 +366,7 @@ export function CreateAccountScreen() {
                 textAlign: 'center',
               }}
             >
-              Submitting your application…
+              Submitting your applications…
             </Text>
           </View>
         </View>
@@ -315,9 +379,11 @@ export function CreateAccountScreen() {
               <Feather name="check" size={44} color="#059669" strokeWidth={3} />
             </View>
             <Text style={styles.successModalTitle}>Application Submitted</Text>
-            <Text style={styles.successModalMessage}>
-              Your application has been sent to the management. Please be patient while we review it. You will be notified once your profile is approved.
-            </Text>
+            <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ paddingBottom: 8 }}>
+              <Text style={styles.successModalMessage}>
+                {successMessage}
+              </Text>
+            </ScrollView>
             <TouchableOpacity style={styles.successModalBtn} onPress={handleSuccessOk} activeOpacity={0.85}>
               <Text style={styles.successModalBtnText}>Got it</Text>
             </TouchableOpacity>

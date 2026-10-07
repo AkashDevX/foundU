@@ -32,17 +32,17 @@ import { isBlank, missingFieldsAlert } from '../validation';
 
 interface Step1PersonalProfileProps {
   onNext: RegistrationWizardNext;
-  /** Master DB company slug from GET /api/v1/bootstrap. */
-  companySlug: string | null;
-  onCompanySlugChange: (slug: string) => void;
+  /** Master DB company slugs from GET /api/v1/bootstrap. */
+  companySlugs: string[];
+  onCompanySlugsChange: (slugs: string[]) => void;
   /** Restored when returning from a later step (registration upload ref). */
   initialProfilePhotoUri?: string | null;
 }
 
 export function Step1PersonalProfile({
   onNext,
-  companySlug,
-  onCompanySlugChange,
+  companySlugs,
+  onCompanySlugsChange,
   initialProfilePhotoUri = null,
 }: Step1PersonalProfileProps) {
   const { companies, picklists, loading: bootstrapLoading } = useAppBootstrap();
@@ -112,7 +112,7 @@ export function Step1PersonalProfile({
 
   const submitStep1 = useCallback(() => {
     const missing: string[] = [];
-    if (!companySlug) missing.push('Company');
+    if (companySlugs.length === 0) missing.push('Company');
     if (!profilePhotoUri) missing.push('Profile photo');
     if (isBlank(email)) missing.push('Email address');
     if (isBlank(phone)) missing.push('Phone number');
@@ -133,20 +133,26 @@ export function Step1PersonalProfile({
       return;
     }
 
-    const org = companies.find((c) => c.slug === companySlug);
-    if (!org) {
+    const selectedOrgs = companies.filter((c) => companySlugs.includes(c.slug));
+    if (selectedOrgs.length === 0) {
       setBlockingAlert({
         title: 'Select company',
         message: 'Organization list is still loading or unavailable.',
       });
       return;
     }
+    const primary = selectedOrgs[0];
     onNext(
       {
-        companySlug,
-        registrationCompanySlug: companySlug,
-        registrationCompanyAppKey: org.appKey ?? undefined,
-        companyName: org.name,
+        companySlug: primary.slug,
+        registrationCompanySlug: primary.slug,
+        registrationCompanyAppKey: primary.appKey ?? undefined,
+        companyName: primary.name,
+        registrationCompanies: selectedOrgs.map((org) => ({
+          slug: org.slug,
+          appKey: org.appKey,
+          name: org.name,
+        })),
         email: email.trim(),
         phone: phone.trim(),
         fullLegalName: fullLegalName.trim(),
@@ -162,7 +168,7 @@ export function Step1PersonalProfile({
     );
   }, [
     onNext,
-    companySlug,
+    companySlugs,
     companies,
     email,
     phone,
@@ -233,7 +239,7 @@ export function Step1PersonalProfile({
   }, []);
 
   const step1Complete =
-    Boolean(companySlug) &&
+    companySlugs.length > 0 &&
     Boolean(profilePhotoUri) &&
     !isBlank(email) &&
     !isBlank(phone) &&
@@ -302,8 +308,8 @@ export function Step1PersonalProfile({
               variant="createAccount"
               companies={companies}
               listingLoading={orgListLoading}
-              value={companySlug}
-              onChange={onCompanySlugChange}
+              values={companySlugs}
+              onChange={onCompanySlugsChange}
             />
           </View>
 
