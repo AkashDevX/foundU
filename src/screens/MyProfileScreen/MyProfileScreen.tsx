@@ -211,15 +211,17 @@ export function MyProfileScreen() {
           </SectionCard>
 
           <SectionCard icon="shield" title="Work eligibility">
-            <ProfileRow label="Visa status" value={display(profile.visaStatus)} />
-            <ProfileRow label="Unrestricted work rights (AU)" value={display(profile.unrestrictedWorkRights)} />
-            <ProfileRow label="Visa expiry" value={display(profile.visaExpiry)} />
-            <ProfileRow label="Hours per week" value={display(profile.hoursPerWeek)} />
-            <ProfileRow label="Weekly availability" value={display(profile.weeklyAvailabilitySummary)} />
+            <ProfileRow label="Visa or residency status" value={display(profile.visaStatus)} />
+            <ProfileRow label="Visa document" value={display(profile.visaDocumentUploaded)} />
+            <ProfileRow label="Unrestricted work rights in Australia" value={display(profile.unrestrictedWorkRights)} />
+            <ProfileRow label="Visa expiry date" value={display(profile.visaExpiry)} />
+            <ProfileRow label="Preferred hours per week" value={display(profile.hoursPerWeek)} />
+            <ProfileRow label="Preferred weekly availability" value={display(profile.weeklyAvailabilitySummary)} />
             <ProfileRow label="ID documents" value={display(profile.idDocumentsSummary)} isLast />
           </SectionCard>
 
           <SectionCard icon="award" title="Qualifications">
+            <ProfileRow label="Resume / CV" value={display(profile.resumeUploaded)} />
             <ProfileRow label="Police check uploaded" value={display(profile.policeCheckUploaded)} />
             <ProfileRow label="Police check expiry" value={display(profile.policeCheckExpiry)} />
             <ProfileRow label="Fit to work uploaded" value={display(profile.fitToWorkUploaded)} />

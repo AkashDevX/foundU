@@ -7,6 +7,18 @@ export type ScheduledShiftTimes = {
   end_label: string;
 };
 
+export type ClockInWindow = {
+  grace_minutes: number;
+  policy: 'prevent' | 'exception';
+  earliest_label: string;
+  latest_label: string;
+  start_label: string;
+  within_window: boolean;
+  deviation: 'early' | 'late' | null;
+  exception_status: 'pending' | 'cleared' | null;
+  block_message: string | null;
+};
+
 export type TimeClockStatus = {
   is_clocked_in: boolean;
   is_on_break: boolean;
@@ -20,6 +32,8 @@ export type TimeClockStatus = {
   shift_issue?: string | null;
   /** Today's scheduled shift times (null when there is no shift today). */
   scheduled_shift?: ScheduledShiftTimes | null;
+  /** Allowed clock-in window around today's shift start. */
+  clock_in_window?: ClockInWindow | null;
   open_session?: {
     clocked_in_at: string | null;
     break_started_at?: string | null;
@@ -110,6 +124,32 @@ export function geofenceSitesDiffer(
   return Math.abs(a.lat - b.lat) > 0.00005 || Math.abs(a.lng - b.lng) > 0.00005;
 }
 
+function mapClockInWindow(raw: unknown): ClockInWindow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const earliest = typeof o.earliest_label === 'string' ? o.earliest_label : '';
+  const latest = typeof o.latest_label === 'string' ? o.latest_label : '';
+  if (earliest.trim() === '' || latest.trim() === '') return null;
+  const deviation = o.deviation === 'early' || o.deviation === 'late' ? o.deviation : null;
+  const exceptionStatus =
+    o.exception_status === 'pending' || o.exception_status === 'cleared'
+      ? o.exception_status
+      : null;
+  const grace = coerceFiniteNumber(o.grace_minutes);
+
+  return {
+    grace_minutes: grace != null && grace >= 0 ? grace : 20,
+    policy: o.policy === 'prevent' ? 'prevent' : 'exception',
+    earliest_label: earliest,
+    latest_label: latest,
+    start_label: typeof o.start_label === 'string' ? o.start_label : '',
+    within_window: o.within_window === true,
+    deviation,
+    exception_status: exceptionStatus,
+    block_message: typeof o.block_message === 'string' && o.block_message.trim() !== '' ? o.block_message : null,
+  };
+}
+
 function mapScheduledShift(raw: unknown): ScheduledShiftTimes | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -155,6 +195,7 @@ export function mapTimeClockStatus(raw: unknown): TimeClockStatus | null {
       typeof o.assignment_issue === 'string' ? o.assignment_issue : null,
     shift_issue: typeof o.shift_issue === 'string' ? o.shift_issue : null,
     scheduled_shift: mapScheduledShift(o.scheduled_shift),
+    clock_in_window: mapClockInWindow(o.clock_in_window),
     open_session: openSession,
   };
 }

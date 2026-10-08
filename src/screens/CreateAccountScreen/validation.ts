@@ -3,6 +3,13 @@ export function isBlank(value: string | null | undefined): boolean {
   return value == null || String(value).trim() === '';
 }
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** True when value looks like an email address. */
+export function isValidEmail(value: string | null | undefined): boolean {
+  return value != null && EMAIL_PATTERN.test(String(value).trim());
+}
+
 export type MissingFieldsAlert = {
   message: string;
   listItems?: string[];

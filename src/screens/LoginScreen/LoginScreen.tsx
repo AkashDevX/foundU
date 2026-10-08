@@ -398,7 +398,7 @@ export function LoginScreen() {
               { paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.xl },
             ]}
           >
-            <Text style={styles.welcome}>Welcome back</Text>
+            <Text style={styles.welcome}>Welcome !</Text>
             <Text style={styles.subWelcome}>Sign in to manage your shift</Text>
 
             <CompanyPicker

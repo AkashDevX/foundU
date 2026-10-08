@@ -49,6 +49,7 @@ import {
   formatTimeHm,
   isPastWeek,
 } from '../../utils/weeklySchedule';
+import { appTodayLocalDate } from '../../utils/formatDateTime';
 
 type TabType = 'Upcoming' | 'Time off';
 
@@ -378,7 +379,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
   const [timeOffRequests, setTimeOffRequests] = useState<TimeOffRequestItem[]>([]);
   const [timeOffLoading, setTimeOffLoading] = useState(false);
   const [showRequestForm, setShowRequestForm] = useState(false);
-  const [requestDate, setRequestDate] = useState<Date>(() => new Date());
+  const [requestDate, setRequestDate] = useState<Date>(() => appTodayLocalDate());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [requestReason, setRequestReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -455,7 +456,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
     if (result.ok) {
       setShowRequestForm(false);
       setRequestReason('');
-      setRequestDate(new Date());
+      setRequestDate(appTodayLocalDate());
       setFeedback({ title: 'Request sent', message: result.message, variant: 'success' });
       await loadTimeOffRequests();
     } else {
@@ -478,7 +479,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
         value: requestDate,
         mode: 'date',
         display: 'calendar',
-        minimumDate: new Date(),
+        minimumDate: appTodayLocalDate(),
         onValueChange: (_event, picked) => {
           if (picked instanceof Date && !Number.isNaN(picked.getTime())) {
             setRequestDate(picked);
@@ -822,7 +823,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
                 value={requestDate}
                 mode="date"
                 display="inline"
-                minimumDate={new Date()}
+                minimumDate={appTodayLocalDate()}
                 onValueChange={onDateSelected}
                 onDismiss={dismissDatePicker}
               />

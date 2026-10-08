@@ -38,6 +38,7 @@ import {
   unblockEmployee,
 } from '../../services/messagingApi';
 import { setActiveChatConversationId } from '../../services/chatPush';
+import { formatTimeOnly } from '../../utils/formatDateTime';
 import { ChatAttachmentBubble } from './ChatMessageAttachment';
 import { MessagingPolicyCard } from './MessagingPolicyCard';
 import { ReportReasonSheetBody } from './ReportReasonSheet';
@@ -104,11 +105,8 @@ type RouteParams = {
 
 function formatMessageTime(iso: string | null | undefined): string {
   if (!iso) return '';
-  try {
-    return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  } catch {
-    return '';
-  }
+  const formatted = formatTimeOnly(iso);
+  return formatted === '—' ? '' : formatted;
 }
 
 function conversationSubtitle(conversation: MessagingConversation | null): string {

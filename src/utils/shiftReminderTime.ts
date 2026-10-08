@@ -1,21 +1,16 @@
 /**
- * Device-local clock helpers for shift reminders.
+ * Brisbane wall-clock helpers for shift reminders.
  *
- * Shift start/end from the API are wall-clock HH:MM values (shown as e.g. "6:00 PM").
- * Countdown must use the phone's local timezone so "starts at 6:00 PM" matches the
- * clock the employee is looking at — not Australia/Sydney when the device is elsewhere.
+ * Shift start/end from the API are Brisbane HH:MM values (shown as e.g. "6:00 PM").
+ * Countdown uses Australia/Brisbane even when the phone timezone is set somewhere else.
  */
 
-/** Today's calendar date (YYYY-MM-DD) and clock minutes on the device. */
+import { getAppTimezoneClock as readAppTimezoneClock } from './formatDateTime';
+
+/** Today's calendar date (YYYY-MM-DD) and clock minutes in the app timezone. */
 export function getDeviceTimezoneClock(): { ymd: string; totalMinutes: number } {
-  const now = new Date();
-  const y = now.getFullYear();
-  const mo = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return {
-    ymd: `${y}-${mo}-${d}`,
-    totalMinutes: now.getHours() * 60 + now.getMinutes(),
-  };
+  const clock = readAppTimezoneClock();
+  return { ymd: clock.ymd, totalMinutes: clock.totalMinutes };
 }
 
 /** @deprecated Use getDeviceTimezoneClock — kept as alias for existing imports. */

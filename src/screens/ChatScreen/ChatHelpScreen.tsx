@@ -30,7 +30,7 @@ const GLOW = '#6EC1FF';
 const GLOW_SOFT = 'rgba(110,193,255,0.28)';
 
 const WELCOME =
-  "Hi — I'm LynkBot, your CruLynk site guide. Tap a question below and I'll answer it for you.";
+  "Hi — I'm CruLynkBot, your CruLynk site guide. Tap a question below and I'll answer it for you.";
 
 type Mood = 'idle' | 'thinking' | 'talking';
 
@@ -946,7 +946,7 @@ export function ChatHelpScreen() {
         </TouchableOpacity>
         <View style={styles.headerTitleBlock}>
           <Text style={styles.headerTitle}>Help FAQ</Text>
-          <Text style={styles.headerSub}>LynkBot · Site guide</Text>
+          <Text style={styles.headerSub}>CruLynkBot · Site guide</Text>
         </View>
         <TouchableOpacity
           style={styles.headerBtn}
@@ -1002,7 +1002,7 @@ export function ChatHelpScreen() {
               <View style={styles.speechBadge}>
                 <Feather name="cpu" size={12} color={ACCENT} />
               </View>
-              <Text style={styles.speechName}>LynkBot</Text>
+              <Text style={styles.speechName}>CruLynkBot</Text>
             </View>
             <Text style={styles.speechText}>
               {displayText}

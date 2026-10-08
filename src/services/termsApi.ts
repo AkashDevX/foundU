@@ -25,8 +25,8 @@ function normalizeSections(raw: unknown): TermsSection[] {
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
-    const title = typeof row.title === 'string' ? row.title.trim() : '';
-    const body = typeof row.body === 'string' ? row.body.trim() : '';
+    const title = typeof row.title === 'string' ? row.title.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim() : '';
+    const body = typeof row.body === 'string' ? row.body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim() : '';
     if (!title && !body) continue;
     out.push({ title: title || 'Terms', body });
   }
@@ -108,7 +108,9 @@ export async function fetchTermsAndConditions(
     typeof lastUpdatedRaw === 'string' && lastUpdatedRaw.trim() !== '' && lastUpdatedRaw !== '—'
       ? lastUpdatedRaw.trim()
       : null;
-  const content = typeof root.content === 'string' ? root.content.trim() : '';
+  const content = typeof root.content === 'string'
+    ? root.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+    : '';
   let sections = normalizeSections(root.sections);
 
   if (sections.length === 0 && content) {

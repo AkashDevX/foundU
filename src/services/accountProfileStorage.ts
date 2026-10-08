@@ -32,7 +32,6 @@ export async function clearAccountProfile(): Promise<void> {
   }
 }
 
-/** Greeting line under "Welcome back," — prefers full name from registration, then email local-part. */
 /** For avatars: use the server `profilePhotoUrl` if present, else the on-device `profilePhotoLocalUri` from registration. */
 export function getDisplayProfilePhotoUri(
   profile: UserProfileSnapshot | null | undefined,
@@ -45,6 +44,7 @@ export function getDisplayProfilePhotoUri(
   return null;
 }
 
+/** Second line under “Welcome !” — full legal name, then the email local-part. Empty when neither is set. */
 export function welcomeDisplayName(profile: UserProfileSnapshot): string {
   const full = profile.fullLegalName?.trim();
   if (full) return full;
@@ -53,5 +53,5 @@ export function welcomeDisplayName(profile: UserProfileSnapshot): string {
     const local = email.split('@')[0]?.trim();
     if (local) return local;
   }
-  return 'there';
+  return '';
 }

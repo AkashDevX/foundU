@@ -1,4 +1,10 @@
 import type { EmployeeTask, TaskPriority, TaskStatus, TasksListPayload } from '../types/tasks';
+import {
+  calendarDayKeyInAppTimezone,
+  formatCalendarDateLabel,
+  formatInstantInAppTimezone,
+  todayIsoInAppTimezone,
+} from './formatDateTime';
 
 export type ParsedTasksResult =
   | { ok: true; payload: TasksListPayload }
@@ -37,29 +43,28 @@ function formatDueLabel(row: Record<string, unknown>): string {
     row.scheduled_date ??
     row.scheduledDate;
   if (typeof dueRaw === 'string' && dueRaw.trim() !== '') {
-    const d = new Date(dueRaw.includes('T') ? dueRaw : `${dueRaw}T12:00:00`);
-    if (!Number.isNaN(d.getTime())) {
-      const today = new Date();
-      const sameDay =
-        d.getFullYear() === today.getFullYear() &&
-        d.getMonth() === today.getMonth() &&
-        d.getDate() === today.getDate();
+    const raw = dueRaw.trim();
+    const dayKey = calendarDayKeyInAppTimezone(raw);
+    if (dayKey) {
+      const sameDay = dayKey === todayIsoInAppTimezone();
       const timeRange =
         (typeof row.time_range === 'string' && row.time_range.trim()) ||
         (typeof row.timeRange === 'string' && row.timeRange.trim()) ||
         '';
-      const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const time = raw.includes('T')
+        ? formatInstantInAppTimezone(raw, { hour: 'numeric', minute: '2-digit', hour12: true })
+        : '';
       if (sameDay) {
-        return timeRange ? `Today · ${timeRange}` : `Today · ${time}`;
+        if (timeRange) return `Today · ${timeRange}`;
+        if (time && time !== '—') return `Today · ${time}`;
+        return 'Today';
       }
-      const dateLabel = d.toLocaleDateString(undefined, {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-      });
+      const dateLabel = raw.includes('T')
+        ? formatInstantInAppTimezone(raw, { weekday: 'short', day: 'numeric', month: 'short' })
+        : formatCalendarDateLabel(dayKey);
       return timeRange ? `${dateLabel} · ${timeRange}` : dateLabel;
     }
-    return dueRaw.trim();
+    return raw;
   }
 
   if (row.completed_at || row.completedAt) return 'Completed';

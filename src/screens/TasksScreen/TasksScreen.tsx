@@ -22,6 +22,7 @@ import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { fetchAssignedTasks, updateTaskCompletion } from '../../services/tasksApi';
+import { calendarDayKeyInAppTimezone, todayIsoInAppTimezone } from '../../utils/formatDateTime';
 import type { EmployeeTask, TaskPriority } from '../../types/tasks';
 import { SweetAlert } from '../../components/SweetAlert';
 
@@ -91,14 +92,9 @@ function categoryIcon(category: string): React.ComponentProps<typeof Feather>['n
 
 function isDueToday(task: EmployeeTask): boolean {
   if (!task.dueAt || task.completed) return false;
-  const d = new Date(task.dueAt);
-  if (Number.isNaN(d.getTime())) return task.dueLabel.toLowerCase().includes('today');
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
+  const dayKey = calendarDayKeyInAppTimezone(task.dueAt);
+  if (!dayKey) return task.dueLabel.toLowerCase().includes('today');
+  return dayKey === todayIsoInAppTimezone();
 }
 
 export function TasksScreen({ isTabActive = true }: TasksScreenProps) {

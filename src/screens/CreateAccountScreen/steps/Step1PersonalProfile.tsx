@@ -12,6 +12,9 @@ import {
   TouchableWithoutFeedback,
   ActivityIndicator,
   Image,
+  Keyboard,
+  StyleSheet,
+  useWindowDimensions,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'react-native-image-picker';
@@ -28,10 +31,12 @@ import {
   formatDateToDisplay,
   parseDisplayDateToDate,
 } from '../../../components/ThemedDatePickerField';
-import { isBlank, missingFieldsAlert } from '../validation';
+import { isBlank, isValidEmail, missingFieldsAlert } from '../validation';
 
 interface Step1PersonalProfileProps {
   onNext: RegistrationWizardNext;
+  /** False while a later step is showing. The form stays mounted so values are kept. */
+  active?: boolean;
   /** Master DB company slugs from GET /api/v1/bootstrap. */
   companySlugs: string[];
   onCompanySlugsChange: (slugs: string[]) => void;
@@ -41,13 +46,17 @@ interface Step1PersonalProfileProps {
 
 export function Step1PersonalProfile({
   onNext,
+  active = true,
   companySlugs,
   onCompanySlugsChange,
   initialProfilePhotoUri = null,
 }: Step1PersonalProfileProps) {
-  const { companies, picklists, loading: bootstrapLoading } = useAppBootstrap();
+  const { height: windowHeight } = useWindowDimensions();
+  const { companies, picklists, loading: bootstrapLoading, refreshing, refetch } = useAppBootstrap();
   const orgListLoading = bootstrapLoading && companies.length === 0;
   const maritalOptions = picklists.marital_status ?? [];
+  const relationshipOptions = picklists.emergency_contact_relationship ?? [];
+  const relationshipListMaxHeight = Math.max(220, Math.round(windowHeight * 0.58) - spacing.lg * 2);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [fullLegalName, setFullLegalName] = useState('');
@@ -58,7 +67,9 @@ export function Step1PersonalProfile({
   const [emergencyContactName, setEmergencyContactName] = useState('');
   const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
   const [emergencyContactRelationship, setEmergencyContactRelationship] = useState('');
+  const [emergencyRelationshipOther, setEmergencyRelationshipOther] = useState('');
   const [showMaritalModal, setShowMaritalModal] = useState(false);
+  const [showRelationshipModal, setShowRelationshipModal] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressSearchLoading, setAddressSearchLoading] = useState(false);
   const [blockingAlert, setBlockingAlert] = useState<{
@@ -67,10 +78,32 @@ export function Step1PersonalProfile({
     listItems?: string[];
   } | null>(null);
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | null>(() => initialProfilePhotoUri ?? null);
+  const [showPhotoSourceModal, setShowPhotoSourceModal] = useState(false);
+  const photoPickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    setProfilePhotoUri(initialProfilePhotoUri ?? null);
+    if (!initialProfilePhotoUri) return;
+    setProfilePhotoUri((current) => current || initialProfilePhotoUri);
   }, [initialProfilePhotoUri]);
+
+  useEffect(() => {
+    if (active) return;
+    if (photoPickerTimerRef.current) {
+      clearTimeout(photoPickerTimerRef.current);
+      photoPickerTimerRef.current = null;
+    }
+    setShowMaritalModal(false);
+    setShowRelationshipModal(false);
+    setShowPhotoSourceModal(false);
+    setBlockingAlert(null);
+    setAddressSuggestions([]);
+  }, [active]);
+
+  useEffect(() => {
+    return () => {
+      if (photoPickerTimerRef.current) clearTimeout(photoPickerTimerRef.current);
+    };
+  }, []);
 
   const dobDefaultForPicker = useMemo(() => new Date(1990, 0, 1), []);
 
@@ -82,39 +115,117 @@ export function Step1PersonalProfile({
   const addressRef = useRef<TextInput>(null);
   const emergencyNameRef = useRef<TextInput>(null);
   const emergencyPhoneRef = useRef<TextInput>(null);
-  const emergencyRelationshipRef = useRef<TextInput>(null);
+  const emergencyRelationshipOtherRef = useRef<TextInput>(null);
 
   const styles = createAccountScreenStyles;
   const dobMinimum = new Date(1900, 0, 1);
   const dobMaximum = new Date();
+  const isOtherRelationship = emergencyContactRelationship === 'Other';
+  const resolvedRelationship = (
+    isOtherRelationship ? emergencyRelationshipOther : emergencyContactRelationship
+  ).trim();
+  const selectedRelationshipLabel =
+    relationshipOptions.find((opt) => opt.value === emergencyContactRelationship)?.label ??
+    emergencyContactRelationship;
 
-  const pickProfilePhoto = useCallback(() => {
-    if (!ImagePicker.launchImageLibrary) {
+  useEffect(() => {
+    if (!isOtherRelationship) return;
+    const handle = requestAnimationFrame(() => {
+      emergencyRelationshipOtherRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [isOtherRelationship]);
+
+  const openPhotoSourcePicker = useCallback(() => {
+    Keyboard.dismiss();
+    setShowPhotoSourceModal(true);
+  }, []);
+
+  const handlePickerResponse = useCallback((res: ImagePicker.ImagePickerResponse) => {
+    if (res.didCancel) return;
+    if (res.errorCode === 'permission') {
       setBlockingAlert({
-        title: 'Image picker not available',
-        message: 'Please fully rebuild the app after installing react-native-image-picker.',
+        title: 'Camera access needed',
+        message:
+          'Allow camera access to take a profile photo. You can also choose an existing photo from your library.',
       });
       return;
     }
-    ImagePicker.launchImageLibrary(
-      {
-        mediaType: 'photo',
-        selectionLimit: 1,
-      },
-      (res) => {
-        if (res.didCancel || res.errorCode || !res.assets?.[0]?.uri) {
-          return;
-        }
-        setProfilePhotoUri(res.assets[0].uri);
-      },
-    );
+    if (res.errorCode === 'camera_unavailable') {
+      setBlockingAlert({
+        title: 'Camera unavailable',
+        message: 'This device has no camera available. Choose an existing photo instead.',
+      });
+      return;
+    }
+    if (res.errorCode || !res.assets?.[0]?.uri) {
+      if (res.errorCode) {
+        setBlockingAlert({
+          title: 'Could not add photo',
+          message: 'Try again, or choose a photo from your library.',
+        });
+      }
+      return;
+    }
+    setProfilePhotoUri(res.assets[0].uri);
   }, []);
+
+  const runPickerAfterSheetCloses = useCallback((launch: () => void) => {
+    setShowPhotoSourceModal(false);
+    if (photoPickerTimerRef.current) clearTimeout(photoPickerTimerRef.current);
+    photoPickerTimerRef.current = setTimeout(launch, 350);
+  }, []);
+
+  const showPickerUnavailable = useCallback(() => {
+    setShowPhotoSourceModal(false);
+    setBlockingAlert({
+      title: 'Image picker not available',
+      message: 'Please fully rebuild the app after installing react-native-image-picker.',
+    });
+  }, []);
+
+  const takeProfilePhoto = useCallback(() => {
+    if (!ImagePicker.launchCamera) {
+      showPickerUnavailable();
+      return;
+    }
+    runPickerAfterSheetCloses(() => {
+      ImagePicker.launchCamera(
+        {
+          mediaType: 'photo',
+          cameraType: 'front',
+          saveToPhotos: false,
+          quality: 0.8,
+          maxWidth: 1600,
+          maxHeight: 1600,
+        },
+        handlePickerResponse,
+      );
+    });
+  }, [handlePickerResponse, runPickerAfterSheetCloses, showPickerUnavailable]);
+
+  const chooseExistingPhoto = useCallback(() => {
+    if (!ImagePicker.launchImageLibrary) {
+      showPickerUnavailable();
+      return;
+    }
+    runPickerAfterSheetCloses(() => {
+      ImagePicker.launchImageLibrary(
+        {
+          mediaType: 'photo',
+          selectionLimit: 1,
+        },
+        handlePickerResponse,
+      );
+    });
+  }, [handlePickerResponse, runPickerAfterSheetCloses, showPickerUnavailable]);
 
   const submitStep1 = useCallback(() => {
     const missing: string[] = [];
     if (companySlugs.length === 0) missing.push('Company');
     if (!profilePhotoUri) missing.push('Profile photo');
     if (isBlank(email)) missing.push('Email address');
+    else if (!isValidEmail(email)) missing.push('a valid email address');
     if (isBlank(phone)) missing.push('Phone number');
     if (isBlank(fullLegalName)) missing.push('Full legal name');
     if (!dobDate) missing.push('Date of birth');
@@ -123,7 +234,7 @@ export function Step1PersonalProfile({
     if (isBlank(address)) missing.push('Address');
     if (isBlank(emergencyContactName)) missing.push('Emergency contact name');
     if (isBlank(emergencyContactPhone)) missing.push('Emergency contact phone');
-    if (isBlank(emergencyContactRelationship)) missing.push('Emergency contact relationship');
+    if (isBlank(resolvedRelationship)) missing.push('Emergency contact relationship');
 
     if (missing.length > 0) {
       setBlockingAlert({
@@ -162,7 +273,7 @@ export function Step1PersonalProfile({
         address: address.trim(),
         emergencyContactName: emergencyContactName.trim(),
         emergencyContactPhone: emergencyContactPhone.trim(),
-        emergencyContactRelationship: emergencyContactRelationship.trim(),
+        emergencyContactRelationship: resolvedRelationship,
       },
       profilePhotoUri ? { profilePhotoUri } : undefined,
     );
@@ -179,7 +290,7 @@ export function Step1PersonalProfile({
     address,
     emergencyContactName,
     emergencyContactPhone,
-    emergencyContactRelationship,
+    resolvedRelationship,
     profilePhotoUri,
   ]);
 
@@ -241,7 +352,7 @@ export function Step1PersonalProfile({
   const step1Complete =
     companySlugs.length > 0 &&
     Boolean(profilePhotoUri) &&
-    !isBlank(email) &&
+    isValidEmail(email) &&
     !isBlank(phone) &&
     !isBlank(fullLegalName) &&
     Boolean(dobDate) &&
@@ -250,7 +361,7 @@ export function Step1PersonalProfile({
     !isBlank(address) &&
     !isBlank(emergencyContactName) &&
     !isBlank(emergencyContactPhone) &&
-    !isBlank(emergencyContactRelationship);
+    !isBlank(resolvedRelationship);
 
   return (
     <>
@@ -275,7 +386,7 @@ export function Step1PersonalProfile({
             <View style={styles.photoWrapper}>
               <TouchableOpacity
                 activeOpacity={0.88}
-                onPress={pickProfilePhoto}
+                onPress={openPhotoSourcePicker}
                 accessibilityRole="button"
                 accessibilityLabel={profilePhotoUri ? 'Change profile photo' : 'Add profile photo'}
               >
@@ -292,14 +403,17 @@ export function Step1PersonalProfile({
               <TouchableOpacity
                 style={styles.photoAddBtn}
                 activeOpacity={0.85}
-                onPress={pickProfilePhoto}
-                accessibilityLabel="Choose photo from library"
+                onPress={openPhotoSourcePicker}
+                accessibilityLabel={profilePhotoUri ? 'Change profile photo' : 'Add profile photo'}
               >
                 <Feather name={profilePhotoUri ? 'edit-2' : 'plus'} size={22} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.uploadLabel}>
-              {profilePhotoUri ? 'Photo added — tap to change' : 'Upload Photo *'}
+            <Text style={styles.uploadLabel}>Profile photo *</Text>
+            <Text style={styles.photoRequiredHint}>
+              {profilePhotoUri
+                ? 'Photo added — tap to change'
+                : 'Required'}
             </Text>
           </View>
 
@@ -403,7 +517,12 @@ export function Step1PersonalProfile({
             </Text>
             <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
           </TouchableOpacity>
-          <Modal visible={showMaritalModal} transparent animationType="fade">
+          <Modal
+            visible={showMaritalModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowMaritalModal(false)}
+          >
             <Pressable style={styles.modalOverlay} onPress={() => setShowMaritalModal(false)}>
               <TouchableWithoutFeedback>
                 <View style={styles.modalContent}>
@@ -425,9 +544,9 @@ export function Step1PersonalProfile({
           </Modal>
 
           <Text style={[styles.fieldLabel, { marginTop: spacing.xl }]}>Address *</Text>
-          <Text style={styles.addressSuggestHint}>
+          {/* <Text style={styles.addressSuggestHint}>
             Start typing — matching addresses are suggested (OpenStreetMap).
-          </Text>
+          </Text> */}
           <View style={styles.addressSuggestWrap}>
             <Pressable
               style={[styles.input, styles.inputMultiline]}
@@ -506,24 +625,108 @@ export function Step1PersonalProfile({
               value={emergencyContactPhone}
               onChangeText={setEmergencyContactPhone}
               keyboardType="phone-pad"
-              returnKeyType="next"
-              blurOnSubmit={false}
-              onSubmitEditing={() => emergencyRelationshipRef.current?.focus()}
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
           </Pressable>
           <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Relationship *</Text>
-          <Pressable style={styles.input} onPress={() => emergencyRelationshipRef.current?.focus()}>
-            <TextInput
-              ref={emergencyRelationshipRef}
-              style={styles.inputField}
-              placeholder="e.g. Spouse, Parent, Sibling"
-              placeholderTextColor="#9CA3AF"
-              value={emergencyContactRelationship}
-              onChangeText={setEmergencyContactRelationship}
-              returnKeyType="done"
-              onSubmitEditing={submitStep1}
-            />
-          </Pressable>
+          <TouchableOpacity
+            style={styles.input}
+            onPress={() => {
+              setShowRelationshipModal(true);
+              if (relationshipOptions.length === 0) {
+                void refetch();
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.inputField, !emergencyContactRelationship && { color: '#9CA3AF' }]}>
+              {emergencyContactRelationship ? selectedRelationshipLabel : 'Select relationship'}
+            </Text>
+            <Feather name="chevron-down" size={20} color="#6B7280" style={styles.inputIconRight} />
+          </TouchableOpacity>
+          <Modal
+            visible={showRelationshipModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowRelationshipModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <Pressable
+                style={StyleSheet.absoluteFillObject}
+                onPress={() => setShowRelationshipModal(false)}
+              />
+              <View
+                style={[
+                  styles.modalContent,
+                  {
+                    width: '100%',
+                    alignSelf: 'center',
+                    overflow: 'hidden',
+                    zIndex: 1,
+                    maxHeight: Math.round(windowHeight * 0.7),
+                  },
+                ]}
+              >
+                <ScrollView
+                  keyboardShouldPersistTaps="always"
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                  bounces={false}
+                  style={{ maxHeight: relationshipListMaxHeight }}
+                >
+                  {relationshipOptions.length === 0 ? (
+                    <View style={styles.modalOption}>
+                      {refreshing || bootstrapLoading ? (
+                        <ActivityIndicator size="small" color="#0056D2" />
+                      ) : (
+                        <Text style={styles.modalOptionText}>
+                          Relationships could not be loaded. Close and try again.
+                        </Text>
+                      )}
+                    </View>
+                  ) : (
+                    relationshipOptions.map((opt, idx) => (
+                      <TouchableOpacity
+                        key={opt.value}
+                        style={[
+                          styles.modalOption,
+                          { width: '100%' },
+                          idx === relationshipOptions.length - 1 ? styles.modalOptionLast : null,
+                        ]}
+                        onPress={() => {
+                          setEmergencyContactRelationship(opt.value);
+                          if (opt.value !== 'Other') {
+                            setEmergencyRelationshipOther('');
+                          }
+                          setShowRelationshipModal(false);
+                        }}
+                      >
+                        <Text style={styles.modalOptionText}>{opt.label}</Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
+          {isOtherRelationship ? (
+            <>
+              <Text style={[styles.fieldHint, { marginTop: spacing.lg }]}>Please specify *</Text>
+              <Pressable style={styles.input} onPress={() => emergencyRelationshipOtherRef.current?.focus()}>
+                <TextInput
+                  ref={emergencyRelationshipOtherRef}
+                  style={styles.inputField}
+                  placeholder="Relationship"
+                  placeholderTextColor="#9CA3AF"
+                  value={emergencyRelationshipOther}
+                  onChangeText={setEmergencyRelationshipOther}
+                  returnKeyType="done"
+                  onSubmitEditing={submitStep1}
+                />
+              </Pressable>
+            </>
+          ) : null}
 
           <TouchableOpacity
             style={[styles.saveBtn, !step1Complete && { opacity: 0.6 }]}
@@ -536,6 +739,50 @@ export function Step1PersonalProfile({
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+
+      <Modal
+        visible={showPhotoSourceModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPhotoSourceModal(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowPhotoSourceModal(false)}>
+          <TouchableWithoutFeedback>
+            <View style={styles.modalContent}>
+              <Text style={styles.photoSourceTitle}>
+                {profilePhotoUri ? 'Change profile photo' : 'Add profile photo'}
+              </Text>
+              <Text style={styles.photoSourceHint}>A profile photo is required.</Text>
+              <TouchableOpacity
+                style={styles.modalOption}
+                onPress={takeProfilePhoto}
+                accessibilityRole="button"
+                accessibilityLabel="Take photo with camera"
+              >
+                <Feather name="camera" size={20} color="#0056D2" />
+                <Text style={styles.modalOptionText}>Take photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalOption}
+                onPress={chooseExistingPhoto}
+                accessibilityRole="button"
+                accessibilityLabel="Choose existing photo"
+              >
+                <Feather name="image" size={20} color="#0056D2" />
+                <Text style={styles.modalOptionText}>Choose existing photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalOption, styles.modalOptionLast]}
+                onPress={() => setShowPhotoSourceModal(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
+                <Text style={styles.modalOptionText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </Pressable>
+      </Modal>
 
       <SweetAlert
         visible={blockingAlert !== null}

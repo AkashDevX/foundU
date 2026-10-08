@@ -6,11 +6,12 @@ import {
   StatusBar,
   Modal,
   Pressable,
-  ActivityIndicator,
   ScrollView,
+  BackHandler,
+  Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from 'react-native-vector-icons/Feather';
 import { SweetAlert } from '../../components/SweetAlert';
 import { createAccountScreenStyles } from '../../styles/styles';
@@ -21,9 +22,7 @@ import {
   type RegistrationUploads,
 } from '../../types/registrationUploads';
 import { loadAccountProfile, saveAccountProfile } from '../../services/accountProfileStorage';
-import { API_BASE_URL } from '../../config/api';
 import { tryParseApiJson } from '../../utils/parseApiJson';
-import { fontFamily as themeFontFamily } from '../../theme/theme';
 import {
   parseRegistrationApplicationResults,
   submitFoundURegistrationApplications,
@@ -73,49 +72,110 @@ function formatApplicationResultsMessage(results: RegistrationApplicationResult[
     return `${sent} ${loginHint}`;
   }
 
-  const otherLines = others.map((r) => {
-    const label = r.name || r.slug;
-    if (r.status === 'already_applied') {
-      return `• ${label} — already has a pending application for this email.`;
-    }
-    if (r.status === 'already_registered') {
-      return `• ${label} — an account with this email already exists.`;
-    }
-    return `• ${label} — ${r.message?.trim() || 'could not accept this application.'}`;
-  });
+  const otherLines = others.map((r) => `• ${plainResultReason(r)}`);
 
   return `${sent}\n\nCould not complete:\n${otherLines.join('\n')}\n\n${loginHint}`;
 }
 
-function formatRegistrationApiError(parsed: unknown, raw: string): string {
-  if (parsed && typeof parsed === 'object' && 'errors' in parsed) {
-    const errObj = (parsed as { errors?: Record<string, string[] | string> }).errors;
-    if (errObj && typeof errObj === 'object') {
-      const lines: string[] = [];
-      for (const msgs of Object.values(errObj)) {
-        if (Array.isArray(msgs)) {
-          for (const m of msgs) {
-            if (typeof m === 'string' && m.trim() !== '') {
-              lines.push(m);
-            }
-          }
-        } else if (typeof msgs === 'string' && msgs.trim() !== '') {
-          lines.push(msgs);
-        }
+function submitStageLabel(percent: number): string {
+  if (percent >= 100) return 'Server accepted your application';
+  if (percent >= 99) return 'Waiting for the server to confirm';
+  if (percent > 0) return 'Sending to the server';
+  return 'Connecting to the server';
+}
+
+function companyLabel(result: RegistrationApplicationResult): string {
+  const name = result.name?.trim() ?? '';
+  if (name !== '' && name !== result.slug.trim() && !/^[a-z0-9-]+$/.test(name)) {
+    return name;
+  }
+  return 'A selected company';
+}
+
+function plainResultReason(result: RegistrationApplicationResult): string {
+  const label = companyLabel(result);
+  if (result.status === 'already_applied') {
+    return `${label} already has an application waiting for this email.`;
+  }
+  if (result.status === 'already_registered') {
+    return `${label} already has an account for this email.`;
+  }
+  return `${label} could not take this application right now.`;
+}
+
+function looksTechnical(text: string): boolean {
+  return /https?:\/\/|\/api\/|\bHTTP\b|sql|exception|stack trace|tenant|app\s?key|bootstrap|slug|json|token|registry|database|undefined|null/i.test(
+    text,
+  );
+}
+
+function plainValidationLine(raw: string): string | null {
+  let text = raw.trim().replace(/\s+/g, ' ');
+  if (text === '' || looksTechnical(text)) return null;
+  const fieldMatch = text.match(/^The (.+?) field (.+)$/i);
+  if (fieldMatch) {
+    const label = fieldMatch[1].replace(/[_.]/g, ' ').replace(/\s+/g, ' ').trim();
+    const nice = label.charAt(0).toUpperCase() + label.slice(1);
+    text = `${nice} ${fieldMatch[2]}`;
+  }
+  return text.endsWith('.') ? text : `${text}.`;
+}
+
+function validationErrorLines(parsed: unknown): string[] {
+  if (!parsed || typeof parsed !== 'object' || !('errors' in parsed)) return [];
+  const errObj = (parsed as { errors?: Record<string, string[] | string> }).errors;
+  if (!errObj || typeof errObj !== 'object') return [];
+  const lines: string[] = [];
+  for (const msgs of Object.values(errObj)) {
+    if (Array.isArray(msgs)) {
+      for (const m of msgs) {
+        if (typeof m === 'string' && m.trim() !== '') lines.push(m.trim());
       }
-      if (lines.length > 0) {
-        return lines.join('\n');
-      }
+    } else if (typeof msgs === 'string' && msgs.trim() !== '') {
+      lines.push(msgs.trim());
     }
   }
-  if (parsed && typeof parsed === 'object' && 'message' in parsed) {
-    const m = (parsed as { message?: unknown }).message;
-    if (typeof m === 'string' && m.trim() !== '') {
-      return m;
-    }
+  return lines;
+}
+
+function serverMessage(parsed: unknown): string {
+  if (!parsed || typeof parsed !== 'object' || !('message' in parsed)) return '';
+  const message = (parsed as { message?: unknown }).message;
+  return typeof message === 'string' ? message.trim() : '';
+}
+
+/** Plain-language failure copy. Never surfaces system or response wording. */
+function registrationFailureCopy(parsed: unknown): { message: string; listItems: string[] } {
+  const failed = parseRegistrationApplicationResults(parsed).filter((result) => result.status !== 'created');
+  if (failed.length > 0) {
+    return {
+      message: 'We couldn’t send your application. Please check the points below, then try again.',
+      listItems: failed.map(plainResultReason),
+    };
   }
-  const t = raw.trim();
-  return t !== '' ? t.slice(0, 800) : 'Something went wrong. Please try again.';
+
+  const validation = validationErrorLines(parsed)
+    .map(plainValidationLine)
+    .filter((line): line is string => line != null);
+  if (validation.length > 0) {
+    return {
+      message: 'A few details need to be updated before we can send your application.',
+      listItems: validation,
+    };
+  }
+
+  return {
+    message: 'We couldn’t send your application just now. Please try again in a moment.',
+    listItems: [],
+  };
+}
+
+function networkFailureMessage(error: unknown): string {
+  const errMsg = error instanceof Error ? error.message.trim() : String(error).trim();
+  if (/timeout/i.test(errMsg)) {
+    return 'This is taking longer than usual. Check your connection and try again.';
+  }
+  return 'We couldn’t connect just now. Check your internet connection and try again.';
 }
 
 export function CreateAccountScreen() {
@@ -130,26 +190,80 @@ export function CreateAccountScreen() {
   const [companySlugs, setCompanySlugs] = useState<string[]>([]);
   const profileSnapshotRef = useRef<Partial<UserProfileSnapshot>>({});
   const registrationUploadsRef = useRef<RegistrationUploads>(emptyRegistrationUploads());
-  const [blockingAlert, setBlockingAlert] = useState<{ title: string; message: string } | null>(null);
+  const [blockingAlert, setBlockingAlert] = useState<{
+    title: string;
+    message: string;
+    variant?: 'warning' | 'error';
+    listItems?: string[];
+  } | null>(null);
   /** Increment after API failure so Step 4 can focus the password field again. */
   const [passwordFocusNonce, setPasswordFocusNonce] = useState(0);
   /** True while POST /register-applications is in flight (after Complete on step 4). */
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /** Share of the request actually sent (0–99), then 100 only after the server accepts it. */
+  const [submitProgress, setSubmitProgress] = useState<number | null>(null);
 
   const styles = createAccountScreenStyles;
   const stepConfig = STEPS[currentStep - 1];
+  const currentStepRef = useRef(currentStep);
+  const blockHardwareBackRef = useRef(false);
+  currentStepRef.current = currentStep;
+  blockHardwareBackRef.current = isSubmitting || showSuccessModal;
 
   const goBack = () => {
-    if (currentStep > 1) {
-      setCurrentStep((s) => s - 1);
+    if (blockHardwareBackRef.current) {
+      return;
+    }
+    if (currentStepRef.current > 1) {
+      Keyboard.dismiss();
+      const previous = currentStepRef.current - 1;
+      currentStepRef.current = previous;
+      setCurrentStep(previous);
     } else {
       navigation.goBack();
     }
   };
 
+  /**
+   * Android system back (3-button nav and gesture) otherwise pops this screen.
+   * Steps 2–4 should move to the previous step, matching the top-left arrow.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      const onHardwareBack = () => {
+        if (blockHardwareBackRef.current) {
+          return true;
+        }
+        if (currentStepRef.current > 1) {
+          Keyboard.dismiss();
+          const previous = currentStepRef.current - 1;
+          currentStepRef.current = previous;
+          setCurrentStep(previous);
+          return true;
+        }
+        navigation.goBack();
+        return true;
+      };
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+      return () => subscription.remove();
+    }, [navigation]),
+  );
+
   const openRegistrationAlert = useCallback(
-    (title: string, message: string, step: number, focusPassword: boolean) => {
-      setBlockingAlert({ title, message });
+    (
+      title: string,
+      message: string,
+      step: number,
+      focusPassword: boolean,
+      variant: 'warning' | 'error' = 'warning',
+      listItems?: string[],
+    ) => {
+      setBlockingAlert({
+        title,
+        message,
+        variant,
+        listItems: listItems && listItems.length > 0 ? listItems : undefined,
+      });
       setCurrentStep(step);
       if (focusPassword) {
         setPasswordFocusNonce((n) => n + 1);
@@ -172,7 +286,7 @@ export function CreateAccountScreen() {
     if (selected.length === 0) {
       openRegistrationAlert(
         'Company not selected',
-        'Pick at least one organization on step 1 (loaded from the server). Pull to refresh bootstrap or check API /bootstrap.',
+        'Choose at least one company on the first step, then try again.',
         1,
         false,
       );
@@ -189,41 +303,38 @@ export function CreateAccountScreen() {
       return;
     }
 
+    setSubmitProgress(0);
     setIsSubmitting(true);
     try {
       const res = await submitFoundURegistrationApplications(
         { ...snap, password: _pwd, password_confirmation: _pc },
         selected.map((c) => ({ slug: c.slug, appKey: c.appKey })),
         registrationUploadsRef.current,
+        (percent) => {
+          setSubmitProgress((current) => Math.max(current ?? 0, percent));
+        },
       );
       const raw = await res.text();
       const parsed = tryParseApiJson(raw);
       const results = parseRegistrationApplicationResults(parsed);
       const created = results.filter((r) => r.status === 'created');
-      const apiMessage =
-        parsed && typeof parsed === 'object' && 'message' in parsed && typeof (parsed as { message?: unknown }).message === 'string'
-          ? (parsed as { message: string }).message
-          : '';
+      const apiMessage = serverMessage(parsed);
 
-      if (!res.ok && created.length === 0) {
-        const msg = formatRegistrationApiError(parsed, raw);
-        openRegistrationAlert('Could not submit application', `${msg}\n\nAPI: ${API_BASE_URL}`, 4, true);
+      if (created.length === 0) {
+        const failure = registrationFailureCopy(parsed);
+        openRegistrationAlert('Application not sent', failure.message, 4, true, 'error', failure.listItems);
         return;
       }
 
       setSuccessMessage(formatApplicationResultsMessage(results, apiMessage || 'Your applications have been sent.'));
+      setSubmitProgress(100);
+      await new Promise((resolve) => setTimeout(resolve, 400));
       setShowSuccessModal(true);
     } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      const slugs = selected.map((c) => c.slug).join(', ');
-      openRegistrationAlert(
-        'Network error',
-        `${errMsg}\n\nAPI: ${API_BASE_URL}\nOrgs: ${slugs}\n\nTips:\n• Run: php artisan serve (same port as api.ts)\n• Android emulator uses 10.0.2.2 → your PC\n• Physical device: set DEV_API_HOST_OVERRIDE in src/config/api.ts + serve --host=0.0.0.0`,
-        4,
-        true,
-      );
+      openRegistrationAlert('Application not sent', networkFailureMessage(e), 4, true, 'error');
     } finally {
       setIsSubmitting(false);
+      setSubmitProgress(null);
     }
   }, [openRegistrationAlert]);
 
@@ -238,6 +349,7 @@ export function CreateAccountScreen() {
           uploadsPatch,
         );
       }
+      Keyboard.dismiss();
       setCurrentStep((step) => {
         if (step < TOTAL_STEPS) {
           return step + 1;
@@ -273,39 +385,58 @@ export function CreateAccountScreen() {
   };
 
   const renderStep = () => {
-    switch (currentStep) {
-      case 1:
-        return (
+    const hostFor = (step: number) =>
+      currentStep === step ? styles.wizardStepHost : styles.wizardStepHostHidden;
+
+    return (
+      <>
+        <View
+          style={hostFor(1)}
+          pointerEvents={currentStep === 1 ? 'auto' : 'none'}
+          accessibilityElementsHidden={currentStep !== 1}
+          importantForAccessibility={currentStep === 1 ? 'auto' : 'no-hide-descendants'}
+        >
           <Step1PersonalProfile
+            active={currentStep === 1}
             onNext={goNext}
             companySlugs={companySlugs}
             onCompanySlugsChange={setCompanySlugs}
             initialProfilePhotoUri={registrationUploadsRef.current.profilePhotoUri ?? null}
           />
-        );
-      case 2:
-        return <Step2WorkEligibility onNext={goNext} />;
-      case 3:
-        return <Step3Qualifications onNext={goNext} />;
-      case 4:
-        return (
+        </View>
+        <View
+          style={hostFor(2)}
+          pointerEvents={currentStep === 2 ? 'auto' : 'none'}
+          accessibilityElementsHidden={currentStep !== 2}
+          importantForAccessibility={currentStep === 2 ? 'auto' : 'no-hide-descendants'}
+        >
+          <Step2WorkEligibility active={currentStep === 2} onNext={goNext} />
+        </View>
+        <View
+          style={hostFor(3)}
+          pointerEvents={currentStep === 3 ? 'auto' : 'none'}
+          accessibilityElementsHidden={currentStep !== 3}
+          importantForAccessibility={currentStep === 3 ? 'auto' : 'no-hide-descendants'}
+        >
+          <Step3Qualifications active={currentStep === 3} onNext={goNext} />
+        </View>
+        <View
+          style={hostFor(4)}
+          pointerEvents={currentStep === 4 ? 'auto' : 'none'}
+          accessibilityElementsHidden={currentStep !== 4}
+          importantForAccessibility={currentStep === 4 ? 'auto' : 'no-hide-descendants'}
+        >
           <Step4EmploymentDetails
+            active={currentStep === 4}
             onNext={goNext}
             companySlugs={companySlugs}
             focusPasswordSignal={passwordFocusNonce}
             isSubmitting={isSubmitting}
+            submitProgress={submitProgress}
           />
-        );
-      default:
-        return (
-          <Step1PersonalProfile
-            onNext={goNext}
-            companySlugs={companySlugs}
-            onCompanySlugsChange={setCompanySlugs}
-            initialProfilePhotoUri={registrationUploadsRef.current.profilePhotoUri ?? null}
-          />
-        );
-    }
+        </View>
+      </>
+    );
   };
 
   return (
@@ -315,6 +446,7 @@ export function CreateAccountScreen() {
         <View style={styles.topBarSide}>
           <TouchableOpacity
             onPress={goBack}
+            disabled={isSubmitting}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             activeOpacity={0.7}
           >
@@ -339,40 +471,26 @@ export function CreateAccountScreen() {
 
       {renderStep()}
 
-      <Modal visible={isSubmitting} transparent animationType="fade">
-        <View
-          style={[
-            styles.successModalOverlay,
-            { backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
-          ]}
-        >
-          <View
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: 16,
-              paddingVertical: 28,
-              paddingHorizontal: 32,
-              alignItems: 'center',
-              maxWidth: 280,
-            }}
-          >
-            <ActivityIndicator size="large" color="#0056D2" />
-            <Text
-              style={{
-                marginTop: 16,
-                fontFamily: themeFontFamily.semiBold,
-                fontSize: 15,
-                color: '#374151',
-                textAlign: 'center',
-              }}
-            >
-              Submitting your applications…
-            </Text>
+      <Modal
+        visible={isSubmitting}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => undefined}
+      >
+        <View style={styles.successModalOverlay}>
+          <View style={styles.successModalCard}>
+            <Text style={styles.submitProgressPercent}>{Math.round(submitProgress ?? 0)}%</Text>
+            <Text style={styles.successModalTitle}>Submitting your applications</Text>
+            <Text style={styles.submitProgressStage}>{submitStageLabel(submitProgress ?? 0)}</Text>
+            <View style={styles.submitProgressTrack}>
+              <View style={[styles.submitProgressFill, { width: `${Math.max(0, Math.min(100, Math.round(submitProgress ?? 0)))}%` }]} />
+            </View>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={showSuccessModal} transparent animationType="fade">
+      <Modal visible={showSuccessModal} transparent animationType="fade" onRequestClose={() => undefined}>
         <Pressable style={styles.successModalOverlay}>
           <View style={styles.successModalCard}>
             <View style={styles.successIconCircle}>
@@ -398,7 +516,8 @@ export function CreateAccountScreen() {
         confirmText="OK"
         cancelText="Cancel"
         hideCancel
-        variant="warning"
+        variant={blockingAlert?.variant ?? 'warning'}
+        listItems={blockingAlert?.listItems}
         onClose={() => setBlockingAlert(null)}
         onConfirm={() => setBlockingAlert(null)}
       />

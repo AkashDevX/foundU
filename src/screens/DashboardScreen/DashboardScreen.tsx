@@ -148,6 +148,15 @@ function clockInFailureAlert(
       variant: 'warning',
     };
   }
+  if (code === 'clock_in_too_early') {
+    return { title: 'Too early to clock in', message, variant: 'warning' };
+  }
+  if (code === 'clock_in_too_late') {
+    return { title: 'Clock-in window closed', message, variant: 'warning' };
+  }
+  if (code === 'clock_in_exception_pending') {
+    return { title: 'Admin permission needed', message, variant: 'warning' };
+  }
   return {
     title: 'Clock in failed',
     message,
@@ -155,22 +164,10 @@ function clockInFailureAlert(
   };
 }
 
-function shiftIssueAlert(
-  shiftIssue: string | null | undefined,
-): { title: string; message: string; variant: NonNullable<SweetAlertProps['variant']> } | null {
-  if (shiftIssue === 'no_scheduled_shift_today') {
-    return {
-      title: 'No shift today',
-      message: "You don't have any shifts today.",
-      variant: 'info',
-    };
-  }
-  return null;
-}
-
 /**
- * Text for the shift pill under the clock button: while clocked in it shows when the shift ends,
- * otherwise when it starts; falls back to a clear empty state when there's no shift today.
+ * Text for the shift pill under the clock button. It only states when the shift
+ * starts (or ends, once clocked in). Whether clock-in is allowed is decided
+ * when the employee taps Clock In.
  */
 function shiftPillLabel(
   isClockedIn: boolean,
@@ -225,7 +222,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   const mapLoadSeq = useRef(0);
   /** Avoid re-prompting the same outage every time the Dashboard tab remounts/activates. */
   const connectivityAlertShownRef = useRef(false);
-  const [welcomeName, setWelcomeName] = useState('there');
+  const [welcomeName, setWelcomeName] = useState('');
   const [assignmentProfile, setAssignmentProfile] = useState<UserProfileSnapshot | null>(null);
   const [clockAlert, setClockAlert] = useState<{
     title: string;
@@ -859,30 +856,6 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       return;
     }
 
-    if (timeClockStatus && !timeClockStatus.can_clock_in) {
-      const shiftAlert = shiftIssueAlert(timeClockStatus.shift_issue);
-      if (shiftAlert) {
-        showClockAlert(shiftAlert.title, shiftAlert.message, shiftAlert.variant);
-        return;
-      }
-      if (timeClockStatus.assignment_not_ready_reason === 'no_work_location_assigned') {
-        showClockAlert(
-          'No work site assigned',
-          'Your administrator must assign a work location before you can clock in.',
-          'info',
-        );
-      } else if (timeClockStatus.assignment_not_ready_reason === 'work_location_missing_coordinates') {
-        showClockAlert(
-          'Work site not configured',
-          'Your assigned work location needs map coordinates. Contact your administrator.',
-          'info',
-        );
-      } else {
-        showClockAlert('Cannot clock in', 'Clock in is not available right now.', 'warning');
-      }
-      return;
-    }
-
     await performClockIn();
   };
 
@@ -1095,8 +1068,8 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         }
       >
         <View style={styles.greetingCard}>
-          <Text style={styles.greetingText}>Welcome back,</Text>
-          <Text style={styles.userName}>{welcomeName}</Text>
+          <Text style={styles.greetingText}>Welcome !</Text>
+          {welcomeName ? <Text style={styles.userName}>{welcomeName}</Text> : null}
         </View>
 
         <View style={[styles.clockInCard, isClockedIn ? styles.clockInCardIn : styles.clockInCardOut]}>

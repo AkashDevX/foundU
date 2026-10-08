@@ -43,6 +43,8 @@
 	<array>
 		<string>location</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>We need camera access so you can take a profile photo.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>We need access to your photo library to upload ID documents.</string>
 	<key>UILaunchStoryboardName</key>

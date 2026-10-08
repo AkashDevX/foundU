@@ -81,6 +81,12 @@ export function SweetAlert({
 }: SweetAlertProps) {
   const v = VARIANT[variant];
   const hasList = Boolean(listItems && listItems.length > 0);
+  const listTint =
+    variant === 'error' || variant === 'danger'
+      ? { bg: '#FEF2F2', border: '#FECACA', badge: '#DC2626' }
+      : variant === 'success'
+        ? { bg: '#F0FDF4', border: '#BBF7D0', badge: '#15803D' }
+        : { bg: '#FFFBEB', border: '#FDE68A', badge: v.iconColor };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -101,10 +107,12 @@ export function SweetAlert({
               nestedScrollEnabled
               showsVerticalScrollIndicator
             >
-              <View style={[styles.listBox, { borderColor: v.iconColor }]}>
-                {listItems!.map((item) => (
-                  <View key={item} style={styles.listRow}>
-                    <View style={[styles.listBullet, { backgroundColor: v.iconColor }]} />
+              <View style={[styles.listBox, { backgroundColor: listTint.bg, borderColor: listTint.border }]}>
+                {listItems!.map((item, index) => (
+                  <View key={`${index}-${item}`} style={styles.listRow}>
+                    <View style={[styles.listIndex, { backgroundColor: listTint.badge }]}>
+                      <Text style={styles.listIndexText}>{index + 1}</Text>
+                    </View>
                     <Text style={styles.listItemText}>{item}</Text>
                   </View>
                 ))}
@@ -150,7 +158,7 @@ const styles = StyleSheet.create({
   card: {
     width: Math.min(SCREEN_W - 48, CARD_MAX),
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 22,
     paddingTop: 28,
     paddingHorizontal: 22,
     paddingBottom: 22,
@@ -195,7 +203,7 @@ const styles = StyleSheet.create({
   },
   listScroll: {
     width: '100%',
-    maxHeight: 220,
+    maxHeight: 280,
     marginBottom: 18,
   },
   listScrollContent: {
@@ -203,30 +211,38 @@ const styles = StyleSheet.create({
   },
   listBox: {
     width: '100%',
-    backgroundColor: '#FFFBEB',
-    borderRadius: 10,
+    borderRadius: 16,
     borderWidth: 1,
-    borderLeftWidth: 4,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 8,
   },
   listRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
   },
-  listBullet: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginTop: 7,
+  listIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listIndexText: {
+    fontFamily: fontFamily.bold,
+    fontSize: 12,
+    color: '#FFFFFF',
   },
   listItemText: {
     flex: 1,
-    fontFamily: fontFamily.medium,
+    fontFamily: fontFamily.semiBold,
     fontSize: 14,
-    color: '#374151',
+    color: '#1F2937',
     lineHeight: 20,
   },
   actions: {

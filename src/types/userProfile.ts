@@ -1,3 +1,15 @@
+/** One availability window on a weekday, stored as 24-hour `HH:mm`. An earlier end time means overnight. */
+export type AvailabilityPeriodJson = {
+  start: string;
+  end: string;
+};
+
+/** Hours an employee can work on one weekday during account creation. */
+export type DayAvailabilityJson = {
+  status: 'available' | 'unavailable';
+  periods: AvailabilityPeriodJson[];
+};
+
 /** One organisation chosen during Create Account (from GET /api/v1/bootstrap). */
 export type RegistrationCompany = {
   slug: string;
@@ -68,6 +80,10 @@ export type UserProfileSnapshot = {
   visaStatus?: string;
   unrestrictedWorkRights?: string;
   visaExpiry?: string;
+  /** Yes when a temporary-visa file was uploaded. The storage path stays on the server. */
+  visaDocumentUploaded?: string;
+  /** Yes when a resume or CV file was uploaded. The storage path stays on the server. */
+  resumeUploaded?: string;
   hoursPerWeek?: string;
   weeklyAvailabilitySummary?: string;
   /** Days the assigned shift template runs on (`mon`–`sun`), from backend. */
@@ -90,12 +106,39 @@ export type UserProfileSnapshot = {
   /** Only used when submitting registration to the API — never persist to AsyncStorage. */
   password?: string;
   password_confirmation?: string;
-  /** Step 2 — structured week grid (morning/evening per weekday). */
-  weeklyAvailabilityJson?: Record<string, string[]>;
-  /** Step 2 — ID rows; server may add `storage_path` after multipart upload. */
-  idDocumentsJson?: { documentKey: string; idType: string; imageUploaded: boolean; storage_path?: string }[];
+  /** Step 2 — day-by-day hours, or a legacy morning/evening list per weekday. */
+  weeklyAvailabilityJson?: Record<string, DayAvailabilityJson | string[]>;
+  /** Step 2 — ID rows; server may add `storage_path` and `back_storage_path` after multipart upload. */
+  idDocumentsJson?: {
+    documentKey: string;
+    idType: string;
+    imageUploaded: boolean;
+    backImageUploaded?: boolean;
+    storage_path?: string;
+    back_storage_path?: string;
+  }[];
   /** Step 3 — licence blocks; server may add `storage_path`. Expiry stored as ISO `YYYY-MM-DD`. */
-  licencesJson?: { id: string; type: string; expiry: string; expiry_date?: string; imageUploaded: boolean; storage_path?: string }[];
+  licencesJson?: {
+    id: string;
+    type: string;
+    documentType?: string;
+    /** Free-text name when `type` is Other. */
+    documentTypeOther?: string;
+    expiry: string;
+    expiry_date?: string;
+    imageUploaded: boolean;
+    storage_path?: string;
+  }[];
   /** Step 3 — insurance blocks; server may add `storage_path`. Expiry stored as ISO `YYYY-MM-DD`. */
-  insurancesJson?: { id: string; type: string; expiry: string; expiry_date?: string; imageUploaded: boolean; storage_path?: string }[];
+  insurancesJson?: {
+    id: string;
+    type: string;
+    documentType?: string;
+    /** Free-text name when `type` is Other. */
+    documentTypeOther?: string;
+    expiry: string;
+    expiry_date?: string;
+    imageUploaded: boolean;
+    storage_path?: string;
+  }[];
 };

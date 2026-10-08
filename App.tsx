@@ -66,6 +66,10 @@ function NavigationRoot() {
             getComponent={() => require('./src/screens/MyProfileScreen').MyProfileScreen}
           />
           <Stack.Screen
+            name="IncidentReport"
+            getComponent={() => require('./src/screens/IncidentReportScreen/IncidentReportScreen').IncidentReportScreen}
+          />
+          <Stack.Screen
             name="ConversationThread"
             getComponent={() =>
               require('./src/screens/ChatScreen').ConversationThreadScreen

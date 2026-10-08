@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import type { UserProfileSnapshot } from '../types/userProfile';
+import { parseStoredWeeklyAvailability } from '../utils/employeeAvailability';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile, saveAccountProfile } from './accountProfileStorage';
 import { notifyAssignmentChange } from './assignmentEvents';
@@ -271,17 +272,7 @@ function firstAssignedShiftFromRow(row: Record<string, unknown>): Record<string,
 function parseWeeklyAvailabilityJson(
   v: unknown,
 ): UserProfileSnapshot['weeklyAvailabilityJson'] {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const out: Record<string, string[]> = {};
-  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (Array.isArray(value)) {
-      const slots = value
-        .map((item) => (typeof item === 'string' ? item.trim() : ''))
-        .filter((item) => item !== '');
-      if (slots.length) out[key] = slots;
-    }
-  }
-  return Object.keys(out).length ? out : undefined;
+  return parseStoredWeeklyAvailability(v);
 }
 
 function extractRow(parsed: unknown): Record<string, unknown> | null {
@@ -470,6 +461,8 @@ export function mapMePayloadToUserProfile(
     visaStatus: pickString(row, 'visa_status', 'visaStatus'),
     unrestrictedWorkRights: pickString(row, 'unrestricted_work_rights', 'unrestrictedWorkRights'),
     visaExpiry: pickString(row, 'visa_expiry', 'visaExpiry'),
+    visaDocumentUploaded: asYesNoUploaded(row.visa_document_uploaded ?? row.visaDocumentUploaded),
+    resumeUploaded: asYesNoUploaded(row.resume_uploaded ?? row.resumeUploaded),
     hoursPerWeek: pickString(row, 'hours_per_week', 'hoursPerWeek'),
     weeklyAvailabilitySummary: pickString(
       row,

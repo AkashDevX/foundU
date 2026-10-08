@@ -1,4 +1,5 @@
 import type { UserProfileSnapshot } from '../types/userProfile';
+import { mondayOfWeekIso } from './formatDateTime';
 
 export const WEEK_DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 export type WeekDayKey = (typeof WEEK_DAY_KEYS)[number];
@@ -127,23 +128,12 @@ export function formatTimeHm(hm: string | undefined | null): string {
   return `${h}:${String(m).padStart(2, '0')} ${period}`;
 }
 
-/** Local calendar YYYY-MM-DD (avoid toISOString — UTC can shift the day). */
-function toLocalIsoDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = `${date.getMonth() + 1}`.padStart(2, '0');
-  const d = `${date.getDate()}`.padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 export function isPastWeek(weekStart: string): boolean {
   const current = mondayOfWeek();
   return weekStart < current;
 }
 
+/** Monday (YYYY-MM-DD) of the week containing `date`, in Brisbane time. */
 export function mondayOfWeek(date: Date = new Date()): string {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return toLocalIsoDate(d);
+  return mondayOfWeekIso(date);
 }

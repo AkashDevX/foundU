@@ -4,9 +4,10 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  TouchableWithoutFeedback,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
@@ -36,6 +37,8 @@ export function TermsAndConditionsModal({
   onAccept,
 }: TermsAndConditionsModalProps) {
   const styles = createAccountScreenStyles;
+  const { height: windowHeight } = useWindowDimensions();
+  const cardHeight = Math.round(windowHeight * 0.86);
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState<TermsAndConditionsPayload | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -85,9 +88,9 @@ export function TermsAndConditionsModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.termsModalOverlay} onPress={onClose}>
-        <TouchableWithoutFeedback>
-          <View style={styles.termsModalCard}>
+      <View style={styles.termsModalOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close terms" />
+        <View style={[styles.termsModalCard, { height: cardHeight, maxHeight: cardHeight }]}>
             <View style={styles.termsModalHeader}>
               <View style={styles.termsModalIconWrap}>
                 <Feather name="file-text" size={28} color="#0056D2" />
@@ -105,6 +108,7 @@ export function TermsAndConditionsModal({
               style={styles.termsModalScroll}
               contentContainerStyle={styles.termsModalScrollContent}
               showsVerticalScrollIndicator
+              nestedScrollEnabled
             >
               {loading ? (
                 <View style={{ paddingVertical: 28, alignItems: 'center' }}>
@@ -153,9 +157,8 @@ export function TermsAndConditionsModal({
                 <Text style={styles.termsModalCloseBtnText}>Close</Text>
               </TouchableOpacity>
             )}
-          </View>
-        </TouchableWithoutFeedback>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

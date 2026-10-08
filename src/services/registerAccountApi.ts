@@ -22,20 +22,28 @@ export type RegistrationApplicationResult = {
   public_id?: string;
 };
 
-function appendMultipartFile(formData: FormData, field: string, uri: string, fallbackName: string): void {
+function appendMultipartFile(
+  formData: FormData,
+  field: string,
+  uri: string,
+  fallbackName: string,
+  mimeOverride?: string | null,
+): void {
   const guessMime = (u: string): string => {
     const lower = u.toLowerCase();
     if (lower.endsWith('.png')) return 'image/png';
     if (lower.endsWith('.webp')) return 'image/webp';
     if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (lower.endsWith('.doc')) return 'application/msword';
     if (lower.endsWith('.heic')) return 'image/heic';
     return 'image/jpeg';
   };
   const tail = uri.split('/').pop() || fallbackName;
-  const name = tail.includes('.') ? tail : `${tail}.jpg`;
+  const name = fallbackName.includes('.') ? fallbackName : tail.includes('.') ? tail : `${tail}.jpg`;
   formData.append(field, {
     uri,
-    type: guessMime(uri),
+    type: mimeOverride || guessMime(name),
     name,
   } as unknown as Blob);
 }
@@ -44,23 +52,86 @@ function appendRegistrationUploads(formData: FormData, uploads: RegistrationUplo
   if (uploads.profilePhotoUri) {
     appendMultipartFile(formData, 'profile_photo', uploads.profilePhotoUri, 'profile.jpg');
   }
-  Object.entries(uploads.idDocumentByKey).forEach(([key, uri]) => {
-    appendMultipartFile(formData, `id_document_upload[${key}]`, uri, `id_${key}.jpg`);
+  Object.entries(uploads.idDocumentByKey).forEach(([key, file]) => {
+    appendMultipartFile(
+      formData,
+      `id_document_upload[${key}]`,
+      file.uri,
+      file.name || `id_${key}.jpg`,
+      file.mime,
+    );
   });
-  if (uploads.policeCheckUri) {
-    appendMultipartFile(formData, 'police_check', uploads.policeCheckUri, 'police_check.jpg');
+  Object.entries(uploads.idDocumentBackByKey).forEach(([key, file]) => {
+    appendMultipartFile(
+      formData,
+      `id_document_back_upload[${key}]`,
+      file.uri,
+      file.name || `id_${key}_back.jpg`,
+      file.mime,
+    );
+  });
+  if (uploads.policeCheck?.uri) {
+    appendMultipartFile(
+      formData,
+      'police_check',
+      uploads.policeCheck.uri,
+      uploads.policeCheck.name || 'police_check.jpg',
+      uploads.policeCheck.mime,
+    );
   }
-  if (uploads.fitToWorkUri) {
-    appendMultipartFile(formData, 'fit_to_work', uploads.fitToWorkUri, 'fit_to_work.jpg');
+  if (uploads.fitToWork?.uri) {
+    appendMultipartFile(
+      formData,
+      'fit_to_work',
+      uploads.fitToWork.uri,
+      uploads.fitToWork.name || 'fit_to_work.jpg',
+      uploads.fitToWork.mime,
+    );
   }
-  Object.entries(uploads.licenceUriById).forEach(([id, uri]) => {
-    appendMultipartFile(formData, `licence_upload[${id}]`, uri, `licence_${id}.jpg`);
+  Object.entries(uploads.licenceById).forEach(([id, file]) => {
+    appendMultipartFile(
+      formData,
+      `licence_upload[${id}]`,
+      file.uri,
+      file.name || `licence_${id}.jpg`,
+      file.mime,
+    );
   });
-  Object.entries(uploads.insuranceUriById).forEach(([id, uri]) => {
-    appendMultipartFile(formData, `insurance_upload[${id}]`, uri, `insurance_${id}.jpg`);
+  Object.entries(uploads.insuranceById).forEach(([id, file]) => {
+    appendMultipartFile(
+      formData,
+      `insurance_upload[${id}]`,
+      file.uri,
+      file.name || `insurance_${id}.jpg`,
+      file.mime,
+    );
   });
-  if (uploads.vehicleInsuranceUri) {
-    appendMultipartFile(formData, 'vehicle_insurance', uploads.vehicleInsuranceUri, 'vehicle_insurance.jpg');
+  if (uploads.vehicleInsurance?.uri) {
+    appendMultipartFile(
+      formData,
+      'vehicle_insurance',
+      uploads.vehicleInsurance.uri,
+      uploads.vehicleInsurance.name || 'vehicle_insurance.jpg',
+      uploads.vehicleInsurance.mime,
+    );
+  }
+  if (uploads.visaDocument?.uri) {
+    appendMultipartFile(
+      formData,
+      'visa_document',
+      uploads.visaDocument.uri,
+      uploads.visaDocument.name || 'visa.pdf',
+      uploads.visaDocument.mime,
+    );
+  }
+  if (uploads.resume?.uri) {
+    appendMultipartFile(
+      formData,
+      'resume',
+      uploads.resume.uri,
+      uploads.resume.name || 'resume.pdf',
+      uploads.resume.mime,
+    );
   }
 }
 
@@ -107,14 +178,55 @@ export async function submitFoundURegistration(
   });
 }
 
+function postRegistrationWithProgress(
+  url: string,
+  headers: Record<string, string>,
+  body: string | FormData,
+  onProgress?: (percent: number) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    Object.entries(headers).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value);
+    });
+    xhr.timeout = 180000;
+
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable || event.total <= 0) return;
+      const sent = Math.round((event.loaded / event.total) * 100);
+      onProgress(Math.min(99, Math.max(0, sent)));
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network request failed'));
+    };
+    xhr.ontimeout = () => {
+      reject(new Error('The request took too long. Check your connection and try again.'));
+    };
+    xhr.onload = () => {
+      resolve(
+        new Response(xhr.responseText ?? '', {
+          status: xhr.status,
+          statusText: xhr.statusText,
+        }),
+      );
+    };
+
+    xhr.send(body as XMLHttpRequestBodyInit);
+  });
+}
+
 /**
  * POST one profile to multiple tenant organisations (platform-scoped).
  * Each selected company receives a pending employee for its own admin to review.
+ * `onProgress` is the share of the request body actually sent (0–99). 100 is reserved for a successful server response.
  */
 export async function submitFoundURegistrationApplications(
   payload: RegistrationSubmitPayload,
   companies: RegistrationApplicationCompany[],
   uploads: RegistrationUploads,
+  onProgress?: (percent: number) => void,
 ): Promise<Response> {
   const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/register-applications`;
 
@@ -129,29 +241,31 @@ export async function submitFoundURegistrationApplications(
   };
 
   if (!registrationHasUploads(uploads)) {
-    return fetch(url, {
-      method: 'POST',
-      headers: {
+    return postRegistrationWithProgress(
+      url,
+      {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'X-Platform-Slug': CRULYNK_PLATFORM_SLUG,
       },
-      body: JSON.stringify(jsonBody),
-    });
+      JSON.stringify(jsonBody),
+      onProgress,
+    );
   }
 
   const formData = new FormData();
   formData.append('payload', JSON.stringify(jsonBody));
   appendRegistrationUploads(formData, uploads);
 
-  return fetch(url, {
-    method: 'POST',
-    headers: {
+  return postRegistrationWithProgress(
+    url,
+    {
       Accept: 'application/json',
       'X-Platform-Slug': CRULYNK_PLATFORM_SLUG,
     },
-    body: formData,
-  });
+    formData,
+    onProgress,
+  );
 }
 
 export function parseRegistrationApplicationResults(parsed: unknown): RegistrationApplicationResult[] {

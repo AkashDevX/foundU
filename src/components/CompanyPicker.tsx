@@ -98,10 +98,10 @@ export function CompanyPicker(props: CompanyPickerProps) {
       {isCreateAccount ? (
         <>
           <Text style={caStyles!.fieldLabel}>{label}</Text>
-          <Text style={[caStyles!.fieldHint, { marginBottom: spacing.sm }]}>
+          {/* <Text style={[caStyles!.fieldHint, { marginBottom: spacing.sm }]}>
             Select every organisation you want to join. Each company reviews your application
             independently.
-          </Text>
+          </Text> */}
         </>
       ) : (
         <Text style={loginStyles.label}>{label}</Text>
@@ -157,7 +157,7 @@ export function CompanyPicker(props: CompanyPickerProps) {
         </View>
       ) : null}
 
-      <Modal visible={open} transparent animationType="fade">
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={modalStyles.modalOverlay} onPress={() => setOpen(false)}>
           <TouchableWithoutFeedback>
             <View style={modalStyles.modalContent}>

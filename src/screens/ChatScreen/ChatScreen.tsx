@@ -24,6 +24,7 @@ import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { fetchConversations, fetchMessagingPolicy, acceptMessagingPolicy } from '../../services/messagingApi';
 import type { MessagingConversation } from '../../types/messaging';
 import { MessagingPolicyCard } from './MessagingPolicyCard';
+import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
 
 type ChatScreenProps = {
   isTabActive?: boolean;
@@ -63,11 +64,8 @@ function formatRelativeTime(iso: string | null | undefined): string {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`;
   if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d`;
-  try {
-    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return '';
-  }
+  const label = formatInstantInAppTimezone(iso, { month: 'short', day: 'numeric' });
+  return label === '—' ? '' : label;
 }
 
 export function ChatScreen({ isTabActive = true }: ChatScreenProps) {

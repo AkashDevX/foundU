@@ -90,10 +90,12 @@ export function formatZoneBadgeLabel(
   const enterRadius = effectiveEnterRadiusM(geofenceRadiusM, accuracyMeters);
 
   if (distanceToSiteM <= enterRadius) {
-    const remainingM = Math.max(0, Math.round(geofenceRadiusM - distanceToSiteM));
-    return `Within range · ${remainingM} m remaining`;
+    // const remainingM = Math.max(0, Math.round(geofenceRadiusM - distanceToSiteM));
+    // return `Within range · ${remainingM} m remaining`;
+    return `Within range `;
   }
 
-  const beyondM = Math.max(0, Math.round(distanceToSiteM - geofenceRadiusM));
-  return `Out of range · ${beyondM} m beyond`;
+  // const beyondM = Math.max(0, Math.round(distanceToSiteM - geofenceRadiusM));
+  // return `Out of range · ${beyondM} m beyond`;
+  return `Out of range `;
 }

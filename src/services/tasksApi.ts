@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '../config/api';
-import { DEFAULT_APP_TIMEZONE } from '../config/timezone';
+import { todayIsoInAppTimezone } from '../utils/formatDateTime';
 import type { EmployeeTask, TasksListPayload } from '../types/tasks';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
@@ -24,12 +24,7 @@ export { normalizeTask } from '../utils/tasksParse';
 const PRIMARY_TASKS_PATH = '/api/v1/tasks';
 
 function todayIsoDate(): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: DEFAULT_APP_TIMEZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
+  return todayIsoInAppTimezone();
 }
 
 async function resolveCompanySlug(): Promise<string | null> {

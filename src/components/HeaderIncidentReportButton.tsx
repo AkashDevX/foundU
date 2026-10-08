@@ -1,46 +1,32 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import { TouchableOpacity, View, StyleSheet } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
-import { openIncidentReportForm } from '../config/incidentReporting';
-import { SweetAlert } from './SweetAlert';
 import { dashboardStyles } from '../styles/styles';
 
 const SIREN_RED = '#DC2626';
 
 /**
- * Top-bar control that opens the workplace incident JotForm.
+ * Top-bar control that opens the in-app incident report.
  * Place beside logout on every main tab header.
  */
 export function HeaderIncidentReportButton() {
-  const [errorVisible, setErrorVisible] = useState(false);
+  const navigation = useNavigation<any>();
 
   const onPress = useCallback(() => {
-    void openIncidentReportForm().catch(() => setErrorVisible(true));
-  }, []);
+    navigation.navigate('IncidentReport');
+  }, [navigation]);
 
   return (
-    <>
-      <TouchableOpacity
-        style={styles.btn}
-        activeOpacity={0.7}
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel="Report an incident"
-      >
-        <MaterialCommunityIcons name="alarm-light" size={26} color={SIREN_RED} />
-      </TouchableOpacity>
-      <SweetAlert
-        visible={errorVisible}
-        title="Could not open form"
-        message="Please try again, or ask your manager for the incident report link."
-        confirmText="OK"
-        cancelText="Cancel"
-        hideCancel
-        variant="error"
-        onConfirm={() => setErrorVisible(false)}
-        onClose={() => setErrorVisible(false)}
-      />
-    </>
+    <TouchableOpacity
+      style={styles.btn}
+      activeOpacity={0.7}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Report an incident"
+    >
+      <MaterialCommunityIcons name="alarm-light" size={26} color={SIREN_RED} />
+    </TouchableOpacity>
   );
 }
 

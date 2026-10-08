@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api';
+import { addIsoDays, mondayOfWeekIso } from '../utils/formatDateTime';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile } from './accountProfileStorage';
@@ -105,27 +106,13 @@ function extractSchedule(parsed: unknown): WeeklySchedulePayload | null {
   };
 }
 
-/** Local calendar YYYY-MM-DD (avoid toISOString — UTC can shift the day). */
-function toLocalIsoDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = `${date.getMonth() + 1}`.padStart(2, '0');
-  const d = `${date.getDate()}`.padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-/** ISO date (YYYY-MM-DD) for Monday of the week containing `date`, in local calendar. */
+/** ISO date (YYYY-MM-DD) for Monday of the week containing `date`, in Brisbane time. */
 export function mondayOfWeek(date: Date = new Date()): string {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return toLocalIsoDate(d);
+  return mondayOfWeekIso(date);
 }
 
 export function shiftWeekStart(isoMonday: string, deltaWeeks: number): string {
-  const d = new Date(`${isoMonday}T12:00:00`);
-  d.setDate(d.getDate() + deltaWeeks * 7);
-  return toLocalIsoDate(d);
+  return addIsoDays(isoMonday, deltaWeeks * 7);
 }
 
 /**

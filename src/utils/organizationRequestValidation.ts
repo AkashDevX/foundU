@@ -1,11 +1,7 @@
-import { isBlank } from '../screens/CreateAccountScreen/validation';
+import { isBlank, isValidEmail } from '../screens/CreateAccountScreen/validation';
 import type { OrganizationRequestForm, OrganizationRequestPayload } from '../types/organizationRequest';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export function isValidEmail(value: string): boolean {
-  return EMAIL_PATTERN.test(value.trim());
-}
+export { isValidEmail };
 
 export type OrganizationRequestValidation =
   | { ok: true; payload: OrganizationRequestPayload }
