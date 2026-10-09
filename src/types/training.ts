@@ -20,12 +20,27 @@ export type TrainingSummary = {
   passed: boolean | null;
   submitted_at: string | null;
   band: TrainingBand;
+  is_induction?: boolean;
+  max_attempts?: number | null;
+  attempts_used?: number;
+  attempts_remaining?: number | null;
+};
+
+export type InductionAttemptState = {
+  is_induction: boolean;
+  can_retry: boolean;
+  attempts_used: number;
+  max_attempts: number;
+  attempts_remaining: number;
+  passed: boolean;
+  locked: boolean;
 };
 
 export type TrainingPageSection = {
   id: number;
   title: string;
   body: string;
+  has_image: boolean;
   sort_order: number;
 };
 
@@ -33,6 +48,8 @@ export type TrainingPage = {
   id: number;
   title: string;
   body: string;
+  bullets: string[];
+  has_image: boolean;
   sort_order: number;
   sections: TrainingPageSection[];
 };
@@ -68,4 +85,5 @@ export type TrainingDetail = {
   quiz_unlocked: boolean;
   questions: TrainingQuestion[];
   result: TrainingResult | null;
+  induction?: InductionAttemptState | null;
 };

@@ -8,11 +8,13 @@ import {
   LayoutChangeEvent,
   Platform,
   AppState,
+  DeviceEventEmitter,
   type AppStateStatus,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GeofenceAutoClockOutMonitor } from '../components/GeofenceAutoClockOutMonitor';
+import { BreakWindowMonitor } from '../components/BreakWindowMonitor';
 import { ShiftComingSoonMonitor } from '../components/ShiftComingSoonMonitor';
 import { LogoutSweetAlertProvider } from '../context/LogoutSweetAlertContext';
 import { colors, fontFamily } from '../theme/theme';
@@ -24,7 +26,7 @@ import { ChatScreen } from '../screens/ChatScreen';
 import { FLOATING_TAB_BAR_BOTTOM_INSET } from './floatingTabBarMetrics';
 import { runWhenIdle } from '../utils/runWhenIdle';
 import { fetchConversations } from '../services/messagingApi';
-import { startChatPush } from '../services/chatPush';
+import { CHAT_INCOMING_EVENT, startChatPush } from '../services/chatPush';
 
 const ACTIVE = colors.primary;
 const INACTIVE = '#94A3B8';
@@ -306,6 +308,14 @@ export function MainTabs() {
     void startChatPush();
   }, []);
 
+  // Push arrived while the app is open — refresh the badge immediately.
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(CHAT_INCOMING_EVENT, () => {
+      void refreshChatBadge();
+    });
+    return () => sub.remove();
+  }, [refreshChatBadge]);
+
   // Badge sync while signed in — keep light so local `artisan serve` is not starved.
   // Skip while Chat is open (ChatScreen already polls the inbox).
   useEffect(() => {
@@ -350,6 +360,7 @@ export function MainTabs() {
     <LogoutSweetAlertProvider>
       {monitorReady ? <GeofenceAutoClockOutMonitor /> : null}
       {monitorReady ? <ShiftComingSoonMonitor /> : null}
+      {monitorReady ? <BreakWindowMonitor /> : null}
 
       <View style={styles.container}>
         <View style={styles.screenStack}>

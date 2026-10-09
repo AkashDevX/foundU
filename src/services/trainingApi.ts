@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '../config/api';
-import type { TrainingDetail, TrainingSummary } from '../types/training';
+import type { InductionAttemptState, TrainingDetail, TrainingSummary } from '../types/training';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
@@ -94,6 +94,10 @@ function asSummary(raw: unknown): TrainingSummary | null {
     passed: typeof r.passed === 'boolean' ? r.passed : r.passed == null ? null : Boolean(r.passed),
     submitted_at: typeof r.submitted_at === 'string' ? r.submitted_at : null,
     band: (typeof r.band === 'string' ? r.band : 'pending') as TrainingSummary['band'],
+    is_induction: r.is_induction === true,
+    max_attempts: r.max_attempts != null ? Number(r.max_attempts) : null,
+    attempts_used: r.attempts_used != null ? Number(r.attempts_used) : 0,
+    attempts_remaining: r.attempts_remaining != null ? Number(r.attempts_remaining) : null,
   };
 }
 
@@ -119,17 +123,23 @@ function asDetail(raw: unknown): TrainingDetail | null {
                   if (!Number.isFinite(sid)) return null;
                   return {
                     id: sid,
-                    title: typeof sec.title === 'string' ? sec.title : 'Subtopic',
+                    title: typeof sec.title === 'string' ? sec.title : 'Section',
                     body: typeof sec.body === 'string' ? sec.body : '',
+                    has_image: sec.has_image === true,
                     sort_order: Number(sec.sort_order ?? 0),
                   };
                 })
                 .filter(Boolean)
             : [];
+          const bullets = Array.isArray(row.bullets)
+            ? row.bullets.filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+            : [];
           return {
             id,
-            title: typeof row.title === 'string' ? row.title : 'Page',
+            title: typeof row.title === 'string' ? row.title : 'Slide',
             body: typeof row.body === 'string' ? row.body : '',
+            bullets,
+            has_image: row.has_image === true,
             sort_order: Number(row.sort_order ?? 0),
             sections: sections as TrainingDetail['pages'][number]['sections'],
           };
@@ -201,6 +211,22 @@ function asDetail(raw: unknown): TrainingDetail | null {
     quiz_unlocked: Boolean(r.quiz_unlocked),
     questions: questions as TrainingDetail['questions'],
     result,
+    induction: asInduction(r.induction),
+  };
+}
+
+function asInduction(raw: unknown): InductionAttemptState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  if (row.is_induction !== true) return null;
+  return {
+    is_induction: true,
+    can_retry: row.can_retry === true,
+    attempts_used: Number(row.attempts_used ?? 0),
+    max_attempts: Number(row.max_attempts ?? 3),
+    attempts_remaining: Number(row.attempts_remaining ?? 0),
+    passed: row.passed === true,
+    locked: row.locked === true,
   };
 }
 
@@ -330,5 +356,49 @@ export async function submitTrainingAnswers(
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Could not submit your answers.';
     return { ok: false, message: userFacingError(message, 'Could not submit your answers.') };
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  if (typeof globalThis.btoa === 'function') {
+    return globalThis.btoa(binary);
+  }
+  throw new Error('btoa is not available');
+}
+
+const slideImageCache = new Map<string, string>();
+
+export function trainingPageImageUrl(pageId: number): string {
+  return `${API_BASE_URL}/api/v1/training/pages/${pageId}/image`;
+}
+
+export function trainingSectionImageUrl(sectionId: number): string {
+  return `${API_BASE_URL}/api/v1/training/sections/${sectionId}/image`;
+}
+
+/** Protected slide picture as a data URI. React Native Image does not send the auth header. */
+export async function fetchTrainingImage(url: string): Promise<string | null> {
+  const cached = slideImageCache.get(url);
+  if (cached) return cached;
+  const auth = await tenantAuthHeaders();
+  if (!auth.ok) return null;
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: { ...auth.headers, Accept: 'image/*' } },
+      { timeoutMs: 30_000, retries: 1, retryDelayMs: 400 },
+    );
+    if (!res.ok) return null;
+    const mime = res.headers.get('content-type')?.split(';')?.[0]?.trim() || 'image/jpeg';
+    const uri = `data:${mime};base64,${arrayBufferToBase64(await res.arrayBuffer())}`;
+    slideImageCache.set(url, uri);
+    return uri;
+  } catch {
+    return null;
   }
 }

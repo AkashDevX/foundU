@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   ScrollView,
   StyleSheet,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -22,6 +23,7 @@ import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage'
 import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { fetchConversations, fetchMessagingPolicy, acceptMessagingPolicy } from '../../services/messagingApi';
+import { CHAT_INCOMING_EVENT } from '../../services/chatPush';
 import type { MessagingConversation } from '../../types/messaging';
 import { MessagingPolicyCard } from './MessagingPolicyCard';
 import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
@@ -153,6 +155,14 @@ export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
       void load(true);
     }, 20_000);
     return () => clearInterval(id);
+  }, [isTabActive, load, policyAccepted]);
+
+  useEffect(() => {
+    if (!isTabActive || !policyAccepted) return undefined;
+    const sub = DeviceEventEmitter.addListener(CHAT_INCOMING_EVENT, () => {
+      void load(true);
+    });
+    return () => sub.remove();
   }, [isTabActive, load, policyAccepted]);
 
   return (
@@ -320,9 +330,11 @@ export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
           }
           renderItem={({ item }) => {
             const unread = (item.unread_count || 0) > 0;
+            const isAnnouncement = item.type === 'announcement';
             const isGroup = item.type === 'group';
             const isAdmin =
               !isGroup &&
+              !isAnnouncement &&
               item.participants?.some((p) => p.type === 'company_admin');
             return (
               <TouchableOpacity
@@ -335,8 +347,15 @@ export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
                   } as never)
                 }
               >
-                <View style={[styles.avatar, { backgroundColor: toneForId(item.id) }]}>
-                  {isGroup ? (
+                <View
+                  style={[
+                    styles.avatar,
+                    { backgroundColor: isAnnouncement ? '#B45309' : toneForId(item.id) },
+                  ]}
+                >
+                  {isAnnouncement ? (
+                    <Feather name="volume-2" size={20} color="#FFFFFF" />
+                  ) : isGroup ? (
                     <Feather name="users" size={20} color="#FFFFFF" />
                   ) : isAdmin ? (
                     <Feather name="shield" size={20} color="#FFFFFF" />
@@ -374,9 +393,27 @@ export function ChatScreen({ isTabActive = true }: ChatScreenProps) {
                     )}
                   </View>
                   <View style={styles.chipRow}>
-                    <View style={[styles.typeChip, isGroup ? styles.typeChipGroup : styles.typeChipDirect]}>
-                      <Text style={[styles.typeChipText, isGroup ? styles.typeChipTextGroup : styles.typeChipTextDirect]}>
-                        {isGroup ? 'Group' : isAdmin ? 'Admin' : 'Direct'}
+                    <View
+                      style={[
+                        styles.typeChip,
+                        isAnnouncement
+                          ? styles.typeChipAnnouncement
+                          : isGroup
+                            ? styles.typeChipGroup
+                            : styles.typeChipDirect,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.typeChipText,
+                          isAnnouncement
+                            ? styles.typeChipTextAnnouncement
+                            : isGroup
+                              ? styles.typeChipTextGroup
+                              : styles.typeChipTextDirect,
+                        ]}
+                      >
+                        {isAnnouncement ? 'Announcement' : isGroup ? 'Group' : isAdmin ? 'Admin' : 'Direct'}
                       </Text>
                     </View>
                     {item.block_status === 'blocked_by_me' || item.block_status === 'blocked_me' ? (
@@ -532,6 +569,7 @@ const styles = StyleSheet.create({
   },
   typeChipDirect: { backgroundColor: '#EFF6FF' },
   typeChipGroup: { backgroundColor: '#ECFDF5' },
+  typeChipAnnouncement: { backgroundColor: '#FFF7ED' },
   typeChipText: {
     fontFamily: fontFamily.semiBold,
     fontSize: 10,
@@ -540,6 +578,7 @@ const styles = StyleSheet.create({
   },
   typeChipTextDirect: { color: colors.primary },
   typeChipTextGroup: { color: '#0F766E' },
+  typeChipTextAnnouncement: { color: '#B45309' },
   blockedChip: {
     paddingVertical: 3,
     paddingHorizontal: 8,

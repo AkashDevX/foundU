@@ -37,6 +37,12 @@ export type WeeklySchedulePayload = {
   scheduled_hours_label: string;
   scheduled_seconds: number;
   days: ScheduleDay[];
+  induction?: {
+    required: boolean;
+    status: string;
+    status_label: string;
+    message: string | null;
+  };
 };
 
 export type FetchWeeklyScheduleResult =
@@ -96,6 +102,20 @@ function extractSchedule(parsed: unknown): WeeklySchedulePayload | null {
         : [],
     }));
 
+  const inductionRaw = s.induction;
+  const induction =
+    inductionRaw && typeof inductionRaw === 'object'
+      ? {
+          required: (inductionRaw as { required?: unknown }).required === true,
+          status: String((inductionRaw as { status?: unknown }).status ?? ''),
+          status_label: String((inductionRaw as { status_label?: unknown }).status_label ?? ''),
+          message:
+            typeof (inductionRaw as { message?: unknown }).message === 'string'
+              ? (inductionRaw as { message: string }).message
+              : null,
+        }
+      : undefined;
+
   return {
     week_start: String(s.week_start ?? ''),
     week_end: String(s.week_end ?? ''),
@@ -103,6 +123,7 @@ function extractSchedule(parsed: unknown): WeeklySchedulePayload | null {
     scheduled_hours_label: String(s.scheduled_hours_label ?? ''),
     scheduled_seconds: typeof s.scheduled_seconds === 'number' ? s.scheduled_seconds : 0,
     days,
+    induction,
   };
 }
 

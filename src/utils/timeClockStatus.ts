@@ -7,6 +7,28 @@ export type ScheduledShiftTimes = {
   end_label: string;
 };
 
+export type BreakWindowPhase =
+  | 'upcoming'
+  | 'approaching'
+  | 'open'
+  | 'on_break'
+  | 'taken'
+  | 'closed';
+
+export type BreakWindow = {
+  required: boolean;
+  opens_at: string;
+  closes_at: string;
+  opens_label: string;
+  closes_label: string;
+  message: string;
+  phase: BreakWindowPhase;
+  within_window: boolean;
+  break_taken: boolean;
+  reminder_lead_minutes: number;
+  block_message: string | null;
+};
+
 export type ClockInWindow = {
   grace_minutes: number;
   policy: 'prevent' | 'exception';
@@ -30,10 +52,14 @@ export type TimeClockStatus = {
   assignment_ready: boolean;
   assignment_not_ready_reason?: string | null;
   shift_issue?: string | null;
+  induction_required?: boolean;
+  induction_message?: string | null;
   /** Today's scheduled shift times (null when there is no shift today). */
   scheduled_shift?: ScheduledShiftTimes | null;
   /** Allowed clock-in window around today's shift start. */
   clock_in_window?: ClockInWindow | null;
+  /** Meal break must be taken inside this part of today's shift. */
+  break_window?: BreakWindow | null;
   open_session?: {
     clocked_in_at: string | null;
     break_started_at?: string | null;
@@ -63,9 +89,9 @@ function coercePositiveMeters(value: unknown): number | null {
 
 /**
  * Live geofence radius from the server.
- * Prefers `geofence_radius_meters` (current config) over a session-stamped
- * `allowed_radius_meters`, which can stay at an older value (e.g. 100) after
- * the configured radius was raised to 300.
+ * Prefers `geofence_radius_meters` for the employee's current work location
+ * over a session-stamped `allowed_radius_meters`, so an admin radius edit
+ * applies without waiting for the next clock-in.
  */
 export function resolveGeofenceRadiusM(status: TimeClockStatus | null | undefined): number {
   const live = coercePositiveMeters(status?.geofence_radius_meters);
@@ -150,6 +176,48 @@ function mapClockInWindow(raw: unknown): ClockInWindow | null {
   };
 }
 
+function mapBreakPhase(value: unknown): BreakWindowPhase {
+  switch (value) {
+    case 'upcoming':
+    case 'approaching':
+    case 'open':
+    case 'on_break':
+    case 'taken':
+    case 'closed':
+      return value;
+    default:
+      return 'upcoming';
+  }
+}
+
+function mapBreakWindow(raw: unknown): BreakWindow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (o.required !== true) return null;
+  const opensLabel = typeof o.opens_label === 'string' ? o.opens_label.trim() : '';
+  const closesLabel = typeof o.closes_label === 'string' ? o.closes_label.trim() : '';
+  const message = typeof o.message === 'string' ? o.message.trim() : '';
+  if (opensLabel === '' || closesLabel === '' || message === '') return null;
+  const lead = coerceFiniteNumber(o.reminder_lead_minutes);
+
+  return {
+    required: true,
+    opens_at: typeof o.opens_at === 'string' ? o.opens_at : '',
+    closes_at: typeof o.closes_at === 'string' ? o.closes_at : '',
+    opens_label: opensLabel,
+    closes_label: closesLabel,
+    message,
+    phase: mapBreakPhase(o.phase),
+    within_window: o.within_window === true,
+    break_taken: o.break_taken === true,
+    reminder_lead_minutes: lead != null && lead >= 0 ? lead : 15,
+    block_message:
+      typeof o.block_message === 'string' && o.block_message.trim() !== ''
+        ? o.block_message
+        : null,
+  };
+}
+
 function mapScheduledShift(raw: unknown): ScheduledShiftTimes | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -194,8 +262,11 @@ export function mapTimeClockStatus(raw: unknown): TimeClockStatus | null {
     assignment_not_ready_reason:
       typeof o.assignment_issue === 'string' ? o.assignment_issue : null,
     shift_issue: typeof o.shift_issue === 'string' ? o.shift_issue : null,
+    induction_required: o.induction_required === true,
+    induction_message: typeof o.induction_message === 'string' ? o.induction_message : null,
     scheduled_shift: mapScheduledShift(o.scheduled_shift),
     clock_in_window: mapClockInWindow(o.clock_in_window),
+    break_window: mapBreakWindow(o.break_window),
     open_session: openSession,
   };
 }

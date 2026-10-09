@@ -2,11 +2,19 @@
  * Chat FCM registration + open-from-notification helpers.
  * Messages stay on Laravel; FCM only wakes the device.
  */
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, DeviceEventEmitter } from 'react-native';
 import { createNavigationContainerRef } from '@react-navigation/native';
 import { registerDeviceToken, unregisterDeviceToken } from './deviceTokenApi';
 
 export const navigationRef = createNavigationContainerRef();
+
+/** Fired when a chat or announcement push arrives while the app is open. */
+export const CHAT_INCOMING_EVENT = 'crulynk.chat.incoming';
+
+export type ChatIncomingPayload = {
+  conversationId: number;
+  kind: string;
+};
 
 let activeConversationId: number | null = null;
 let tokenRefreshUnsub: (() => void) | null = null;
@@ -41,6 +49,15 @@ function conversationIdFromMessage(remoteMessage: RemoteMessageLike): number | n
   if (typeof raw !== 'string' && typeof raw !== 'number') return null;
   const id = Number(raw);
   return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function emitIncomingChat(remoteMessage: RemoteMessageLike): void {
+  const conversationId = conversationIdFromMessage(remoteMessage);
+  if (!conversationId) return;
+  const kindRaw = remoteMessage?.data?.kind;
+  const kind = typeof kindRaw === 'string' && kindRaw !== '' ? kindRaw : 'chat_message';
+  const payload: ChatIncomingPayload = { conversationId, kind };
+  DeviceEventEmitter.emit(CHAT_INCOMING_EVENT, payload);
 }
 
 export function openChatFromPush(remoteMessage: RemoteMessageLike): void {
@@ -131,6 +148,7 @@ export async function startChatPush(): Promise<void> {
     });
 
     foregroundUnsub = fb.onMessage(messaging, async (remoteMessage) => {
+      emitIncomingChat(remoteMessage);
       const id = conversationIdFromMessage(remoteMessage);
       if (id && activeConversationId === id) {
         return;

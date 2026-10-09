@@ -31,7 +31,7 @@ export type MessagingMessage = {
 
 export type MessagingConversation = {
   id: number;
-  type: 'direct' | 'group' | string;
+  type: 'direct' | 'group' | 'announcement' | string;
   title: string;
   participants: Array<{
     type: MessagingPeerType | string;

@@ -26,7 +26,7 @@ import type { SweetAlertProps } from '../../components/SweetAlert';
 import { useLogoutSweetAlert } from '../../context/LogoutSweetAlertContext';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { dashboardStyles } from '../../styles/styles';
-import { colors, spacing } from '../../theme/theme';
+import { colors, fontFamily, spacing } from '../../theme/theme';
 import { API_BASE_URL } from '../../config/api';
 import { loadOpenStreetMapPreview, type MapPreviewResult } from '../../config/maps';
 import { MainTabHeaderRight } from '../../components/HeaderIncidentReportButton';
@@ -53,6 +53,7 @@ import {
   type TimeClockStatus,
 } from '../../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
+import { isInsideBreakWindow } from '../../utils/breakWindow';
 import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
 import {
   DEFAULT_GEOFENCE_RADIUS_M,
@@ -157,6 +158,20 @@ function clockInFailureAlert(
   if (code === 'clock_in_exception_pending') {
     return { title: 'Admin permission needed', message, variant: 'warning' };
   }
+  if (code === 'clock_out_note_required') {
+    return { title: 'Note required', message, variant: 'warning' };
+  }
+  if (code === 'clock_out_approval_pending') {
+    return {
+      title: 'Not clocked out',
+      message:
+        "You won't be clocked out until an administrator approves this. Please contact the admin for further assistance.",
+      variant: 'warning',
+    };
+  }
+  if (code === 'induction_required') {
+    return { title: 'Induction required', message, variant: 'warning' };
+  }
   return {
     title: 'Clock in failed',
     message,
@@ -174,6 +189,9 @@ function shiftPillLabel(
   status: TimeClockStatus | null,
   fallbackStart: string | null | undefined,
 ): string {
+  if (!isClockedIn && status?.induction_required) {
+    return 'Pass induction before clock-in or clock-out';
+  }
   const shift = status?.scheduled_shift;
   if (isClockedIn && shift?.end_label) {
     return `Shift ends at ${shift.end_label}`;
@@ -313,15 +331,18 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     };
   }, [siteLatKey, siteLngKey, geofenceSiteCoords]);
 
-  // Prefer live pin address; fall back to saved assignment address only while geocode loads.
+  // Catalog name and saved address from today's allocated shift. Reverse-geocode
+  // only fills in when that shift site has coordinates but no saved address.
   const mapTargetAddress = geofenceSiteCoords
-    ? siteAddressFromCoords || assignedSiteAddress
+    ? assignedSiteAddress || siteAddressFromCoords
     : locationAddress;
 
-  // Heading follows the place on the map (not a stale catalog name after a pin move).
-  const siteDisplayName = geofenceSiteCoords
-    ? (mapTargetAddress ? shortLocationLabel(mapTargetAddress) : assignedSiteName)
-    : locationLabel;
+  const siteDisplayName = assignedSiteName
+    || (geofenceSiteCoords
+      ? (siteAddressFromCoords ? shortLocationLabel(siteAddressFromCoords) : null)
+      : locationLabel);
+
+  const hasAssignedSite = Boolean(geofenceSiteCoords || assignedSiteName || assignedSiteAddress);
 
   const distanceToSiteM = useMemo(() => {
     if (!userCoords || !geofenceSiteCoords) return null;
@@ -807,7 +828,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   }, [isTabActive, isClockedIn]);
 
   useEffect(() => {
-    if (!isTabActive || !mapTargetCoords || locationError || locationLoading) {
+    // The allocated shift site can render before phone GPS succeeds.
+    if (!isTabActive || !mapTargetCoords) {
+      return;
+    }
+    if (!geofenceSiteCoords && (locationError || locationLoading)) {
       return;
     }
 
@@ -824,10 +849,20 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         if (seq !== mapLoadSeq.current) return;
         setMapPreviewLoading(false);
       });
-  }, [isTabActive, mapTargetCoords, locationError, locationLoading]);
+  }, [isTabActive, mapTargetCoords, locationError, locationLoading, geofenceSiteCoords]);
 
   const handleClockPunch = async () => {
     if (punchBusy) return;
+
+    if (!isClockedIn && timeClockStatus?.induction_required) {
+      showClockAlert(
+        'Induction required',
+        timeClockStatus.induction_message ||
+          'Pass mandatory induction in the Train tab before you can clock in or clock out.',
+        'warning',
+      );
+      return;
+    }
 
     const signedIn = await getSessionAuthenticated();
     if (!signedIn) {
@@ -908,7 +943,6 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   };
 
   const performClockOut = async () => {
-    setShowClockOutModal(false);
     setClockPunching(true);
     try {
       const ready = await requestWorkLocationForAction();
@@ -935,9 +969,15 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       const trimmedComment = clockOutComment.trim();
       const clockResult = await postClockOut(coords, trimmedComment || undefined);
       if (!clockResult.ok) {
-        showClockAlert('Clock out failed', clockResult.message, 'error');
+        if (clockResult.code !== 'clock_out_note_required') {
+          setShowClockOutModal(false);
+        }
+        const alert = clockInFailureAlert(clockResult.code, clockResult.message);
+        showClockAlert(alert.title, alert.message, alert.variant);
         return;
       }
+
+      setShowClockOutModal(false);
 
       setClockOutComment('');
       setIsClockedIn(clockResult.time_clock.is_clocked_in);
@@ -971,6 +1011,12 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     }
 
     const onBreak = timeClockStatus?.is_on_break === true;
+    const breakWindow = timeClockStatus?.break_window;
+    if (!onBreak && breakWindow && !isInsideBreakWindow(breakWindow, Date.now())) {
+      showClockAlert('Break window', breakWindow.message, 'warning');
+      return;
+    }
+
     setBreakPunching(true);
     try {
       const ready = await requestWorkLocationForAction();
@@ -996,7 +1042,12 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
 
       const result = onBreak ? await postBreakOut(coords) : await postBreakIn(coords);
       if (!result.ok) {
-        showClockAlert(onBreak ? 'Break out failed' : 'Break in failed', result.message, 'error');
+        const outsideWindow = result.code === 'break_outside_window';
+        showClockAlert(
+          outsideWindow ? 'Break window' : onBreak ? 'Break out failed' : 'Break in failed',
+          result.message,
+          outsideWindow ? 'warning' : 'error',
+        );
         return;
       }
 
@@ -1071,6 +1122,27 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           <Text style={styles.greetingText}>Welcome !</Text>
           {welcomeName ? <Text style={styles.userName}>{welcomeName}</Text> : null}
         </View>
+
+        {timeClockStatus?.induction_required ? (
+          <View
+            style={{
+              marginHorizontal: 20,
+              marginBottom: 12,
+              borderRadius: 16,
+              backgroundColor: '#FEF3C7',
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+            }}
+          >
+            <Text style={{ fontFamily: fontFamily.bold, fontSize: 15, color: '#92400E' }}>
+              Induction required
+            </Text>
+            <Text style={{ marginTop: 4, fontFamily: fontFamily.regular, fontSize: 13, lineHeight: 18, color: '#78350F' }}>
+              {timeClockStatus.induction_message ||
+                'Pass mandatory induction in the Train tab before you can be rostered or clock in and out.'}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={[styles.clockInCard, isClockedIn ? styles.clockInCardIn : styles.clockInCardOut]}>
           <View
@@ -1197,14 +1269,14 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
             ) : null}
           </View>
 
-          {locationLoading && (
+          {locationLoading && !hasAssignedSite && (
             <View style={styles.locationLoadingRow}>
               <ActivityIndicator size="small" color={colors.primary} />
               <Text style={[styles.locationAddress, styles.locationLoadingText]}>Getting location…</Text>
             </View>
           )}
 
-          {locationError && (
+          {locationError && !hasAssignedSite && (
             <View>
               <Text style={[styles.locationAddress, styles.locationErrorText]}>
                 {locationError === 'permission_denied'
@@ -1226,8 +1298,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           )}
 
           {(mapTargetAddress || siteDisplayName || mapTargetCoords) &&
-            !locationLoading &&
-            !locationError && (
+            (hasAssignedSite || (!locationLoading && !locationError)) && (
             <>
               {siteDisplayName ? (
                 <Text style={styles.locationShortName}>{siteDisplayName}</Text>
@@ -1254,7 +1325,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
             </>
           )}
 
-          {mapTargetCoords && !locationLoading && !locationError && (
+          {mapTargetCoords && (hasAssignedSite || (!locationLoading && !locationError)) && (
             <TouchableOpacity
               style={styles.locationMapTouchable}
               activeOpacity={0.92}
@@ -1300,6 +1371,18 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
             </TouchableOpacity>
           )}
 
+          {locationError === 'permission_denied' && hasAssignedSite ? (
+            <TouchableOpacity
+              style={styles.locationOpenSettingsBtn}
+              onPress={retryLocationPermission}
+              accessibilityRole="button"
+              accessibilityLabel="Allow location to check if you are at the work site"
+            >
+              <Feather name="map-pin" size={18} color={colors.white} />
+              <Text style={styles.locationOpenSettingsText}>Enable location for zone check</Text>
+            </TouchableOpacity>
+          ) : null}
+
           <View style={styles.locationRefreshRow}>
             <Text style={styles.locationCoordsText}>Update location</Text>
             <TouchableOpacity
@@ -1323,11 +1406,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           <View style={styles.clockOutModalCard}>
             <Text style={styles.clockOutModalTitle}>Clock out</Text>
             <Text style={styles.clockOutModalSubtitle}>
-              Add an optional comment for your manager (e.g. reason for leaving early).
+              Leaving before your shift ends needs a note. You won't be clocked out until an administrator approves it. Please contact the admin for further assistance.
             </Text>
             <TextInput
               style={styles.clockOutModalInput}
-              placeholder="Comment (optional)"
+              placeholder="Note for your manager"
               placeholderTextColor="#9CA3AF"
               value={clockOutComment}
               onChangeText={setClockOutComment}

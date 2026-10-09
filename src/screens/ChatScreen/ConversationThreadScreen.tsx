@@ -15,6 +15,7 @@ import {
   NativeModules,
   TurboModuleRegistry,
   ScrollView,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -37,7 +38,7 @@ import {
   sendMessage,
   unblockEmployee,
 } from '../../services/messagingApi';
-import { setActiveChatConversationId } from '../../services/chatPush';
+import { CHAT_INCOMING_EVENT, setActiveChatConversationId } from '../../services/chatPush';
 import { formatTimeOnly } from '../../utils/formatDateTime';
 import { ChatAttachmentBubble } from './ChatMessageAttachment';
 import { MessagingPolicyCard } from './MessagingPolicyCard';
@@ -113,6 +114,7 @@ function conversationSubtitle(conversation: MessagingConversation | null): strin
   if (!conversation) return 'Conversation';
   if (conversation.block_status === 'blocked_by_me') return 'You blocked this chat';
   if (conversation.block_status === 'blocked_me') return 'You’ve been blocked';
+  if (conversation.type === 'announcement') return 'Announcement';
   if (conversation.type === 'group') {
     const count = conversation.participants?.length || 0;
     return `${count} member${count === 1 ? '' : 's'}`;
@@ -192,6 +194,7 @@ export function ConversationThreadScreen() {
   const canUnblock =
     conversation?.type === 'direct' && peerEmployeeId != null && blockStatus === 'blocked_by_me';
   const isGroup = conversation?.type === 'group';
+  const isAnnouncement = conversation?.type === 'announcement';
   const blockBannerText =
     blockStatus === 'blocked_by_me'
       ? 'You blocked this person. You can’t send or receive messages here.'
@@ -294,6 +297,18 @@ export function ConversationThreadScreen() {
     }, 4000);
     return () => clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(CHAT_INCOMING_EVENT, (payload: { conversationId?: number }) => {
+      if (!conversationId || payload?.conversationId !== conversationId) return;
+      if (lastIdRef.current != null) {
+        void load(lastIdRef.current);
+      } else {
+        void load();
+      }
+    });
+    return () => sub.remove();
+  }, [conversationId, load]);
 
   useEffect(() => {
     if (loading || messages.length === 0 || !shouldStickToBottomRef.current) return;
@@ -528,8 +543,21 @@ export function ConversationThreadScreen() {
         >
           <Feather name="arrow-left" size={22} color={colors.primary} />
         </TouchableOpacity>
-        <View style={[styles.headerAvatar, isGroup ? styles.headerAvatarGroup : styles.headerAvatarDirect]}>
-          <Feather name={isGroup ? 'users' : 'user'} size={18} color="#FFFFFF" />
+        <View
+          style={[
+            styles.headerAvatar,
+            isAnnouncement
+              ? styles.headerAvatarAnnouncement
+              : isGroup
+                ? styles.headerAvatarGroup
+                : styles.headerAvatarDirect,
+          ]}
+        >
+          <Feather
+            name={isAnnouncement ? 'volume-2' : isGroup ? 'users' : 'user'}
+            size={18}
+            color="#FFFFFF"
+          />
         </View>
         <View style={styles.headerTextCol}>
           <Text style={styles.headerTitle} numberOfLines={1}>
@@ -703,6 +731,17 @@ export function ConversationThreadScreen() {
             <Feather name="slash" size={16} color="#B91C1C" />
           </View>
           <Text style={styles.blockedBannerText}>{blockBannerText}</Text>
+        </View>
+      ) : null}
+
+      {isAnnouncement && !canSendMessages && policyAccepted ? (
+        <View style={[styles.announcementBanner, { marginBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.announcementBannerIcon}>
+            <Feather name="volume-2" size={16} color="#B45309" />
+          </View>
+          <Text style={styles.announcementBannerText}>
+            Announcement from your organization. Replies are turned off.
+          </Text>
         </View>
       ) : null}
 
@@ -974,6 +1013,7 @@ const styles = StyleSheet.create({
   },
   headerAvatarDirect: { backgroundColor: colors.primary },
   headerAvatarGroup: { backgroundColor: '#0F766E' },
+  headerAvatarAnnouncement: { backgroundColor: '#B45309' },
   headerTextCol: { flex: 1, minWidth: 0 },
   headerTitle: {
     fontFamily: fontFamily.bold,
@@ -1415,6 +1455,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 1,
+  },
+  announcementBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginHorizontal: spacing.lg,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: 'rgba(180,83,9,0.16)',
+  },
+  announcementBannerIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    backgroundColor: '#FFEDD5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  announcementBannerText: {
+    flex: 1,
+    fontFamily: fontFamily.medium,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#9A3412',
   },
   blockedBannerText: {
     flex: 1,

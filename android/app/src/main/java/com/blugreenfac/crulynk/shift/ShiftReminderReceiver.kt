@@ -8,6 +8,22 @@ import android.os.PowerManager
 class ShiftReminderReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent?) {
     when (intent?.action) {
+      BreakWindowAlarm.ACTION_FIRE -> {
+        val pendingResult = goAsync()
+        val wakeLock = acquireBriefWakeLock(context)
+        try {
+          if (intent != null) {
+            BreakWindowAlarm.deliver(context, intent)
+          }
+        } finally {
+          try {
+            if (wakeLock?.isHeld == true) wakeLock.release()
+          } catch (_: Exception) {
+            /* ignore */
+          }
+          pendingResult.finish()
+        }
+      }
       ACTION_CLEAR -> {
         ShiftReminderScheduler.cancelScheduled(context, clearNotification = true)
       }
@@ -22,6 +38,7 @@ class ShiftReminderReceiver : BroadcastReceiver() {
       "android.intent.action.QUICKBOOT_POWERON",
       -> {
         ShiftReminderScheduler.rescheduleFromStorage(context)
+        BreakWindowAlarm.rescheduleFromStorage(context)
       }
       else -> {
         val pendingResult = goAsync()

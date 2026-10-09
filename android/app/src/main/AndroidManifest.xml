@@ -66,6 +66,7 @@
         android:directBootAware="false">
         <intent-filter>
           <action android:name="com.blugreenfac.crulynk.shift.FIRE_REMINDER" />
+          <action android:name="com.blugreenfac.crulynk.shift.FIRE_BREAK_REMINDER" />
           <action android:name="com.blugreenfac.crulynk.shift.CLEAR_REMINDER" />
           <action android:name="com.blugreenfac.crulynk.shift.WATCHDOG" />
         </intent-filter>

@@ -22,11 +22,14 @@ import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage'
 import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
+import { TrainingSlideImage } from '../../components/TrainingSlideImage';
 import {
   acknowledgeTrainingMaterials,
   fetchAssignedTrainings,
   fetchTrainingDetail,
   submitTrainingAnswers,
+  trainingPageImageUrl,
+  trainingSectionImageUrl,
 } from '../../services/trainingApi';
 import type {
   TrainingBand,
@@ -274,6 +277,24 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
     setExpandedSectionIds(new Set());
     loadList({ soft: true });
   }, [loadList]);
+
+  const retryInduction = useCallback(async () => {
+    if (!detail) return;
+    setBusy(true);
+    const result = await fetchTrainingDetail(detail.assignment.id);
+    setBusy(false);
+    if (!result.ok) {
+      setAlert({ title: 'Could not start the next attempt', message: result.message });
+      return;
+    }
+    setDetail(result.detail);
+    setAnswers({});
+    setPageIndex(0);
+    setQuizIndex(0);
+    setViewedPageIds(new Set());
+    setExpandedSectionIds(new Set());
+    setView('detail');
+  }, [detail]);
 
   const startReader = useCallback(() => {
     if (!detail || detail.pages.length === 0) {
@@ -547,6 +568,11 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                         </View>
                       </View>
                       <View style={styles.badgeRow}>
+                        {item.is_induction ? (
+                          <View style={[styles.statusBadge, { backgroundColor: '#FEF3C7' }]}>
+                            <Text style={[styles.statusBadgeText, { color: '#92400E' }]}>Induction</Text>
+                          </View>
+                        ) : null}
                         <View style={styles.statusBadge}>
                           <Text style={styles.statusBadgeText}>{statusLabel(item.status)}</Text>
                         </View>
@@ -554,6 +580,13 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                           <View style={[styles.statusBadge, { backgroundColor: theme.bg }]}>
                             <Text style={[styles.statusBadgeText, { color: theme.text }]}>
                               {formatPercent(item.percent)} · {theme.label}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {item.is_induction && item.max_attempts ? (
+                          <View style={styles.statusBadge}>
+                            <Text style={styles.statusBadgeText}>
+                              {item.attempts_used ?? 0}/{item.max_attempts} attempts
                             </Text>
                           </View>
                         ) : null}
@@ -574,6 +607,13 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
               {detail.assignment.description ? (
                 <Text style={styles.detailHeroDesc}>{detail.assignment.description}</Text>
               ) : null}
+              {detail.induction?.is_induction ? (
+                <Text style={styles.detailHeroDesc}>
+                  Mandatory induction. Pass mark {detail.assignment.pass_percent ?? 92}%. Attempt{' '}
+                  {Math.min((detail.induction.attempts_used ?? 0) + 1, detail.induction.max_attempts)} of{' '}
+                  {detail.induction.max_attempts}. You cannot be rostered or clock in and out until you pass.
+                </Text>
+              ) : null}
             </View>
 
             <View style={styles.infoCard}>
@@ -582,9 +622,9 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                   <Feather name="book" size={18} color={colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.infoLabel}>Study pages</Text>
+                  <Text style={styles.infoLabel}>Slides</Text>
                   <Text style={styles.infoText}>
-                    {detail.pages.length} page{detail.pages.length === 1 ? '' : 's'} to read
+                    {detail.pages.length} slide{detail.pages.length === 1 ? '' : 's'} to view
                   </Text>
                 </View>
               </View>
@@ -618,7 +658,7 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={startReader}>
-                <Text style={styles.primaryBtnText}>Start reading</Text>
+                <Text style={styles.primaryBtnText}>View slides</Text>
               </TouchableOpacity>
             )}
           </>
@@ -628,7 +668,7 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
           <>
             <View style={styles.pageProgress}>
               <Text style={styles.pageProgressText}>
-                Page {pageIndex + 1} of {detail.pages.length}
+                Slide {pageIndex + 1} of {detail.pages.length}
               </Text>
               <View style={styles.progressTrack}>
                 <View
@@ -641,9 +681,28 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
             </View>
 
             <View style={styles.readerCard}>
+              {currentPage.has_image ? (
+                <TrainingSlideImage url={trainingPageImageUrl(currentPage.id)} />
+              ) : (
+                <View style={styles.slideBand}>
+                  <Text style={styles.slideBandIndex}>
+                    {String(pageIndex + 1).padStart(2, '0')}
+                  </Text>
+                </View>
+              )}
               <Text style={styles.readerTitle}>{currentPage.title}</Text>
               {currentPage.body.trim().length > 0 ? (
                 <Text style={styles.readerBody}>{currentPage.body}</Text>
+              ) : null}
+              {currentPage.bullets.length > 0 ? (
+                <View style={styles.bulletList}>
+                  {currentPage.bullets.map((line, bulletIndex) => (
+                    <View key={`${currentPage.id}-${bulletIndex}`} style={styles.bulletRow}>
+                      <View style={styles.bulletDot} />
+                      <Text style={styles.bulletText}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
               ) : null}
 
               {currentPage.sections.length > 0 ? (
@@ -671,7 +730,14 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                           />
                         </Pressable>
                         {open ? (
-                          <Text style={styles.sectionBody}>{section.body}</Text>
+                          <View style={styles.sectionPanel}>
+                            {section.body.trim().length > 0 ? (
+                              <Text style={styles.sectionBody}>{section.body}</Text>
+                            ) : null}
+                            {section.has_image ? (
+                              <TrainingSlideImage url={trainingSectionImageUrl(section.id)} />
+                            ) : null}
+                          </View>
                         ) : null}
                       </View>
                     );
@@ -699,7 +765,7 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                   onPress={() => goToPage(pageIndex + 1)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.navBtnPrimaryText}>Next page</Text>
+                  <Text style={styles.navBtnPrimaryText}>Next slide</Text>
                   <Feather name="chevron-right" size={20} color="#FFFFFF" />
                 </TouchableOpacity>
               ) : (
@@ -872,6 +938,23 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
               </View>
             ))}
 
+            {detail.induction?.passed ? (
+              <Text style={styles.quizHint}>
+                Induction complete. You are eligible for shifts. Your administrator has been notified.
+              </Text>
+            ) : null}
+            {detail.induction?.locked ? (
+              <Text style={styles.quizHint}>
+                You have used all {detail.induction.max_attempts} attempts. Ask an administrator to reset them or grant an override.
+              </Text>
+            ) : null}
+            {detail.induction?.can_retry ? (
+              <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={() => void retryInduction()} disabled={busy}>
+                <Text style={styles.primaryBtnText}>
+                  Try again ({detail.induction.attempts_remaining} left)
+                </Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity style={styles.secondaryBtn} activeOpacity={0.85} onPress={goBackToList}>
               <Text style={styles.secondaryBtnText}>Back to training list</Text>
             </TouchableOpacity>
@@ -1161,6 +1244,47 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text.primary,
     lineHeight: 26,
+  },
+  slideBand: {
+    height: 72,
+    borderRadius: 14,
+    marginBottom: 16,
+    backgroundColor: colors.primary,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  slideBandIndex: {
+    fontFamily: fontFamily.bold,
+    fontSize: 22,
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+  bulletList: {
+    marginTop: 14,
+    gap: 10,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  bulletDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 7,
+    backgroundColor: colors.primary,
+  },
+  bulletText: {
+    flex: 1,
+    fontFamily: fontFamily.regular,
+    fontSize: 16,
+    lineHeight: 24,
+    color: colors.text.primary,
+  },
+  sectionPanel: {
+    paddingBottom: 4,
   },
   sectionList: {
     gap: spacing.sm,

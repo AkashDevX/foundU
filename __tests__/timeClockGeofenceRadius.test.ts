@@ -28,7 +28,7 @@ describe('geofence radius fetching', () => {
     expect(resolveGeofenceRadiusM(status)).toBe(300);
   });
 
-  it('falls back to session radius when live config is missing', () => {
+  it('falls back to session radius when the live work-location radius is missing', () => {
     const status = {
       is_clocked_in: true,
       is_on_break: false,

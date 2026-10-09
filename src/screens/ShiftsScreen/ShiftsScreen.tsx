@@ -642,6 +642,16 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
         </Text>
       </View>
 
+      {schedule?.induction?.required ? (
+        <View style={s.errorCard}>
+          <Feather name="shield" size={20} color="#92400E" />
+          <Text style={s.errorText}>
+            {schedule.induction.message ||
+              'Pass mandatory induction in the Train tab before shifts can be assigned or you can clock in and out.'}
+          </Text>
+        </View>
+      ) : null}
+
       <WeekNavigator
         schedule={schedule}
         loading={scheduleLoading}
@@ -681,7 +691,9 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
           <Text style={s.emptyScheduleHintText}>
             {isPastWeek(weekStart)
               ? 'No shifts were published for this week.'
-              : 'No shifts published for this week yet. Your default assignment is shown below — your manager may still be building the roster.'}
+              : schedule?.induction?.required
+                ? 'No shifts yet. You become eligible after you pass induction, unless an administrator grants an override.'
+                : 'No shifts published for this week yet. Your default assignment is shown below — your manager may still be building the roster.'}
           </Text>
         </View>
       ) : null}

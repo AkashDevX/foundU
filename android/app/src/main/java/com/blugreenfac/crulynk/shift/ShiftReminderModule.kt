@@ -154,6 +154,45 @@ class ShiftReminderModule(private val context: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun scheduleBreakReminders(reminders: ReadableArray, promise: Promise) {
+    try {
+      val now = System.currentTimeMillis()
+      val parsed = mutableListOf<BreakWindowAlarm.Reminder>()
+      for (i in 0 until reminders.size()) {
+        val item = reminders.getMap(i) ?: continue
+        val title = readString(item, "title")
+        val body = readString(item, "body")
+        val triggerAtMs = readLong(item, "triggerAtMs")
+        val notificationId = readInt(item, "notificationId")
+        if (title.isEmpty() || body.isEmpty() || notificationId <= 0) continue
+        if (triggerAtMs <= now + 2_000L) continue
+        parsed.add(
+          BreakWindowAlarm.Reminder(
+            title = title,
+            body = body,
+            triggerAtMs = triggerAtMs,
+            notificationId = notificationId,
+          ),
+        )
+      }
+      BreakWindowAlarm.saveAndSchedule(context, parsed)
+      promise.resolve(parsed.size)
+    } catch (error: Exception) {
+      promise.reject("BREAK_WINDOW_SCHEDULE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun cancelBreakReminders(promise: Promise) {
+    try {
+      BreakWindowAlarm.cancel(context, clearNotification = true)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("BREAK_WINDOW_CANCEL_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun cancelReminders(notificationIds: ReadableArray, promise: Promise) {
     try {
       ShiftReminderScheduler.cancelScheduled(context, clearNotification = true)
