@@ -179,6 +179,11 @@ function clockInFailureAlert(
   };
 }
 
+function earlyClockOutNeedsApproval(status: TimeClockStatus | null | undefined): boolean {
+  const early = status?.early_clock_out;
+  return early?.needs_approval === true && early.approved !== true;
+}
+
 /**
  * Text for the shift pill under the clock button. It only states when the shift
  * starts (or ends, once clocked in). Whether clock-in is allowed is decided
@@ -248,6 +253,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     variant: NonNullable<SweetAlertProps['variant']>;
   } | null>(null);
   const [showClockOutModal, setShowClockOutModal] = useState(false);
+  const [clockOutNeedsApproval, setClockOutNeedsApproval] = useState(false);
   const [clockOutComment, setClockOutComment] = useState('');
   const isOnBreak = timeClockStatus?.is_on_break === true;
   const punchBusy = clockPunching || breakPunching;
@@ -887,6 +893,23 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
 
     if (isClockedIn) {
       setClockOutComment('');
+      setClockPunching(true);
+      let needsApproval = earlyClockOutNeedsApproval(timeClockStatus);
+      let stillClockedIn = true;
+      try {
+        const clock = await fetchTimeClockStatus();
+        if (clock.ok) {
+          setTimeClockStatus(clock.time_clock);
+          setIsClockedIn(clock.time_clock.is_clocked_in);
+          setGeofenceRadiusM(resolveGeofenceRadiusM(clock.time_clock));
+          needsApproval = earlyClockOutNeedsApproval(clock.time_clock);
+          stillClockedIn = clock.time_clock.is_clocked_in;
+        }
+      } finally {
+        setClockPunching(false);
+      }
+      if (!stillClockedIn) return;
+      setClockOutNeedsApproval(needsApproval);
       setShowClockOutModal(true);
       return;
     }
@@ -1013,7 +1036,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     const onBreak = timeClockStatus?.is_on_break === true;
     const breakWindow = timeClockStatus?.break_window;
     if (!onBreak && breakWindow && !isInsideBreakWindow(breakWindow, Date.now())) {
-      showClockAlert('Break window', breakWindow.message, 'warning');
+      showClockAlert('Meal break unavailable', breakWindow.message, 'warning');
       return;
     }
 
@@ -1044,7 +1067,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       if (!result.ok) {
         const outsideWindow = result.code === 'break_outside_window';
         showClockAlert(
-          outsideWindow ? 'Break window' : onBreak ? 'Break out failed' : 'Break in failed',
+          outsideWindow ? 'Meal break unavailable' : onBreak ? 'Break out failed' : 'Break in failed',
           result.message,
           outsideWindow ? 'warning' : 'error',
         );
@@ -1406,11 +1429,13 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           <View style={styles.clockOutModalCard}>
             <Text style={styles.clockOutModalTitle}>Clock out</Text>
             <Text style={styles.clockOutModalSubtitle}>
-              Leaving before your shift ends needs a note. You won't be clocked out until an administrator approves it. Please contact the admin for further assistance.
+              {clockOutNeedsApproval
+                ? "Leaving before your shift ends needs a note. You won't be clocked out until an administrator approves it. Please contact the admin for further assistance."
+                : 'Add an optional comment for your manager (e.g. reason for leaving early).'}
             </Text>
             <TextInput
               style={styles.clockOutModalInput}
-              placeholder="Note for your manager"
+              placeholder={clockOutNeedsApproval ? 'Note for your manager' : 'Comment (optional)'}
               placeholderTextColor="#9CA3AF"
               value={clockOutComment}
               onChangeText={setClockOutComment}

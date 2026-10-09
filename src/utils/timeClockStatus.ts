@@ -41,6 +41,12 @@ export type ClockInWindow = {
   block_message: string | null;
 };
 
+export type EarlyClockOutState = {
+  needs_approval: boolean;
+  approved: boolean;
+  shift_end_label: string | null;
+};
+
 export type TimeClockStatus = {
   is_clocked_in: boolean;
   is_on_break: boolean;
@@ -58,6 +64,8 @@ export type TimeClockStatus = {
   scheduled_shift?: ScheduledShiftTimes | null;
   /** Allowed clock-in window around today's shift start. */
   clock_in_window?: ClockInWindow | null;
+  /** Early clock-out still needs an admin, or that approval is already in. */
+  early_clock_out?: EarlyClockOutState | null;
   /** Meal break must be taken inside this part of today's shift. */
   break_window?: BreakWindow | null;
   open_session?: {
@@ -218,6 +226,17 @@ function mapBreakWindow(raw: unknown): BreakWindow | null {
   };
 }
 
+function mapEarlyClockOut(raw: unknown): EarlyClockOutState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const label = typeof o.shift_end_label === 'string' ? o.shift_end_label.trim() : '';
+  return {
+    needs_approval: o.needs_approval === true,
+    approved: o.approved === true,
+    shift_end_label: label !== '' ? label : null,
+  };
+}
+
 function mapScheduledShift(raw: unknown): ScheduledShiftTimes | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -266,6 +285,7 @@ export function mapTimeClockStatus(raw: unknown): TimeClockStatus | null {
     induction_message: typeof o.induction_message === 'string' ? o.induction_message : null,
     scheduled_shift: mapScheduledShift(o.scheduled_shift),
     clock_in_window: mapClockInWindow(o.clock_in_window),
+    early_clock_out: mapEarlyClockOut(o.early_clock_out),
     break_window: mapBreakWindow(o.break_window),
     open_session: openSession,
   };

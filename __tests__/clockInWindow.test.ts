@@ -23,8 +23,18 @@ describe('clock-in grace window', () => {
         exception_status: 'pending',
         block_message: 'An administrator must clear the exception before you can clock in.',
       },
+      early_clock_out: {
+        needs_approval: false,
+        approved: true,
+        shift_end_label: '5:00 PM',
+      },
     });
 
+    expect(status?.early_clock_out).toEqual({
+      needs_approval: false,
+      approved: true,
+      shift_end_label: '5:00 PM',
+    });
     expect(status?.clock_in_window).toMatchObject({
       grace_minutes: 20,
       policy: 'exception',
