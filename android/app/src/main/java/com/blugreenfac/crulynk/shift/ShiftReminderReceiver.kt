@@ -39,6 +39,7 @@ class ShiftReminderReceiver : BroadcastReceiver() {
       -> {
         ShiftReminderScheduler.rescheduleFromStorage(context)
         BreakWindowAlarm.rescheduleFromStorage(context)
+        com.blugreenfac.crulynk.documents.DocumentRenewalScheduler.rescheduleFromStorage(context)
       }
       else -> {
         val pendingResult = goAsync()

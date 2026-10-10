@@ -165,6 +165,6 @@ export async function submitIncidentReport(
       resolve({ ok: true, message: responseMessage(parsed, 'Incident report submitted.') });
     };
 
-    xhr.send(form as unknown as XMLHttpRequestBodyInit);
+    xhr.send(form);
   });
 }

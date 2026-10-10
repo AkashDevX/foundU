@@ -1,5 +1,5 @@
 import { mapTimeClockStatus } from '../src/utils/timeClockStatus';
-import { breakWindowDetail, resolveBreakPhase } from '../src/utils/breakWindow';
+import { breakWindowDetail, isInsideBreakWindow, resolveBreakPhase } from '../src/utils/breakWindow';
 
 const window = {
   required: true as const,
@@ -44,7 +44,17 @@ describe('break window', () => {
     expect(resolveBreakPhase(window, opens, false)).toBe('open');
     expect(resolveBreakPhase(window, closes, false)).toBe('open');
     expect(resolveBreakPhase(window, closes + 60_000, false)).toBe('closed');
-    expect(breakWindowDetail('open')).toBe('Your break window is open now.');
+    expect(breakWindowDetail('open')).toBe('You can take your break now.');
+  });
+
+  it('allows a break only from the opening time through the closing time', () => {
+    const opens = Date.parse(window.opens_at);
+    const closes = Date.parse(window.closes_at);
+
+    expect(isInsideBreakWindow(window, opens - 60_000)).toBe(false);
+    expect(isInsideBreakWindow(window, opens)).toBe(true);
+    expect(isInsideBreakWindow(window, closes)).toBe(true);
+    expect(isInsideBreakWindow(window, closes + 60_000)).toBe(false);
   });
 
   it('keeps an in-progress break ahead of the clock', () => {

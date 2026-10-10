@@ -11,7 +11,10 @@ function nativeShiftReminder(): ShiftReminderPermissionNative | undefined {
 }
 
 /** Android notification master toggle + optional battery-optimization exemption. */
-export async function requestShiftReminderNotificationPermission(): Promise<boolean> {
+export async function requestShiftReminderNotificationPermission(copy?: {
+  title?: string;
+  message?: string;
+}): Promise<boolean> {
   if (Platform.OS !== 'android') {
     return true;
   }
@@ -24,8 +27,9 @@ export async function requestShiftReminderNotificationPermission(): Promise<bool
       const result = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
         {
-          title: 'Shift reminders',
+          title: copy?.title ?? 'Shift reminders',
           message:
+            copy?.message ??
             'Allow CruLynk to show status-bar notifications when your assigned shift is coming up.',
           buttonPositive: 'Allow',
           buttonNegative: 'Not now',

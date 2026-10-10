@@ -11,7 +11,13 @@ export type {
   ScheduledShiftTimes,
   TimeClockStatus,
 } from '../utils/timeClockStatus';
-export { mapTimeClockStatus, resolveGeofenceRadiusM, resolveGeofenceSiteCoords } from '../utils/timeClockStatus';
+export {
+  activeShiftWorkLocation,
+  mapTimeClockStatus,
+  resolveGeofenceRadiusM,
+  resolveGeofenceSiteCoords,
+  workLocationCoords,
+} from '../utils/timeClockStatus';
 
 export type DeviceCoordinates = {
   latitude: number;
@@ -160,8 +166,17 @@ async function postTimeClockPunch(
   };
 }
 
-export async function postClockIn(coords: DeviceCoordinates): Promise<TimeClockPunchResult> {
-  return postTimeClockPunch('clock-in', coords);
+export async function postClockIn(
+  coords: DeviceCoordinates,
+  scheduleShiftId?: number | null,
+): Promise<TimeClockPunchResult> {
+  return postTimeClockPunch(
+    'clock-in',
+    coords,
+    scheduleShiftId != null && scheduleShiftId > 0
+      ? { schedule_shift_id: scheduleShiftId }
+      : undefined,
+  );
 }
 
 export async function postClockOut(
@@ -204,6 +219,8 @@ export type LocationPingResult =
       message: string;
       throttled: boolean;
       idle_alert: IdleAlertPayload | null;
+      auto_clocked_out: boolean;
+      time_clock: TimeClockStatus | null;
     }
   | { ok: false; message: string; code?: string };
 
@@ -268,6 +285,8 @@ export async function postLocationPing(coords: DeviceCoordinates): Promise<Locat
     message?: string;
     throttled?: boolean;
     idle_alert?: unknown;
+    auto_clocked_out?: boolean;
+    time_clock?: unknown;
   };
 
   return {
@@ -275,6 +294,8 @@ export async function postLocationPing(coords: DeviceCoordinates): Promise<Locat
     message: typeof body.message === 'string' ? body.message : 'Location ping recorded.',
     throttled: Boolean(body.throttled),
     idle_alert: mapIdleAlert(body.idle_alert),
+    auto_clocked_out: body.auto_clocked_out === true,
+    time_clock: body.auto_clocked_out === true ? mapTimeClockStatus(body.time_clock) : null,
   };
 }
 

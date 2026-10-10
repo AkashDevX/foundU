@@ -7,6 +7,25 @@ export type ScheduledShiftTimes = {
   end_label: string;
 };
 
+export type ShiftWorkLocation = {
+  id: number | null;
+  name: string | null;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofence_radius_meters: number | null;
+};
+
+export type ScheduledShiftRow = ScheduledShiftTimes & {
+  id: number | null;
+  within_window: boolean;
+  is_current: boolean;
+  /** True after this roster row has been clocked out. The card stays on Home. */
+  is_finished: boolean;
+  work_location_name: string | null;
+  work_location: ShiftWorkLocation | null;
+};
+
 export type BreakWindowPhase =
   | 'upcoming'
   | 'approaching'
@@ -62,6 +81,10 @@ export type TimeClockStatus = {
   induction_message?: string | null;
   /** Today's scheduled shift times (null when there is no shift today). */
   scheduled_shift?: ScheduledShiftTimes | null;
+  /** Unfinished shifts for today. A clocked-out shift is omitted. */
+  scheduled_shifts?: ScheduledShiftRow[];
+  /** Work site for the open session, or the next shift the employee can clock into. */
+  work_location?: ShiftWorkLocation | null;
   /** Allowed clock-in window around today's shift start. */
   clock_in_window?: ClockInWindow | null;
   /** Early clock-out still needs an admin, or that approval is already in. */
@@ -110,6 +133,32 @@ export function resolveGeofenceRadiusM(status: TimeClockStatus | null | undefine
 }
 
 export type GeofenceSiteCoords = { lat: number; lng: number };
+
+export function workLocationCoords(
+  location: ShiftWorkLocation | null | undefined,
+): GeofenceSiteCoords | null {
+  if (!location) return null;
+  const lat = location.latitude;
+  const lng = location.longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+/**
+ * Work site for the shift the employee is clocked into, or the next one they
+ * can clock into. Other same-day shifts are ignored so their sites cannot
+ * make the range check pass.
+ */
+export function activeShiftWorkLocation(
+  shifts: ScheduledShiftRow[] | null | undefined,
+): ShiftWorkLocation | null {
+  const rows = (shifts ?? []).filter((row) => !row.is_finished);
+  const current = rows.find((row) => row.is_current);
+  if (current?.work_location) return current.work_location;
+  if (rows.length === 1) return rows[0].work_location ?? null;
+  return null;
+}
 
 /**
  * Live assigned work location wins over session-stamped clock-in coords.
@@ -237,6 +286,42 @@ function mapEarlyClockOut(raw: unknown): EarlyClockOutState | null {
   };
 }
 
+function mapWorkLocation(raw: unknown): ShiftWorkLocation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const name = typeof o.name === 'string' ? o.name.trim() : '';
+  const address = typeof o.address === 'string' ? o.address.trim() : '';
+  const latitude = coerceFiniteNumber(o.latitude);
+  const longitude = coerceFiniteNumber(o.longitude);
+  if (name === '' && address === '' && latitude == null && longitude == null) return null;
+  const id = coerceFiniteNumber(o.id);
+  return {
+    id: id != null ? id : null,
+    name: name !== '' ? name : null,
+    address: address !== '' ? address : null,
+    latitude,
+    longitude,
+    geofence_radius_meters: coercePositiveMeters(o.geofence_radius_meters),
+  };
+}
+
+function mapScheduledShiftRow(raw: unknown): ScheduledShiftRow | null {
+  const times = mapScheduledShift(raw);
+  if (!times || !raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = coerceFiniteNumber(o.id);
+  const locationName = typeof o.work_location_name === 'string' ? o.work_location_name.trim() : '';
+  return {
+    ...times,
+    id: id != null ? id : null,
+    within_window: o.within_window === true,
+    is_current: o.is_current === true && o.is_finished !== true,
+    is_finished: o.is_finished === true,
+    work_location_name: locationName !== '' ? locationName : null,
+    work_location: mapWorkLocation(o.work_location),
+  };
+}
+
 function mapScheduledShift(raw: unknown): ScheduledShiftTimes | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -284,6 +369,12 @@ export function mapTimeClockStatus(raw: unknown): TimeClockStatus | null {
     induction_required: o.induction_required === true,
     induction_message: typeof o.induction_message === 'string' ? o.induction_message : null,
     scheduled_shift: mapScheduledShift(o.scheduled_shift),
+    scheduled_shifts: Array.isArray(o.scheduled_shifts)
+      ? o.scheduled_shifts
+          .map((row) => mapScheduledShiftRow(row))
+          .filter((row): row is ScheduledShiftRow => row != null)
+      : [],
+    work_location: mapWorkLocation(o.work_location),
     clock_in_window: mapClockInWindow(o.clock_in_window),
     early_clock_out: mapEarlyClockOut(o.early_clock_out),
     break_window: mapBreakWindow(o.break_window),

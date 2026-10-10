@@ -45,6 +45,29 @@ const config = {
       return context.resolveRequest(context, moduleName, platform);
     },
   },
+  server: {
+    enhanceMiddleware: (middleware) => {
+      return (req, res, next) => {
+        // Android's OkHttp client fails while reading Metro's chunked
+        // multipart/mixed bundle (ProtocolException: leading byte 0x0d).
+        // A normal application/javascript body with Content-Length loads.
+        const accept = req.headers.accept;
+        if (typeof accept === 'string' && accept.includes('multipart/mixed')) {
+          const nextAccept = accept
+            .split(',')
+            .map(part => part.trim())
+            .filter(part => part && part !== 'multipart/mixed')
+            .join(', ');
+          if (nextAccept) {
+            req.headers.accept = nextAccept;
+          } else {
+            delete req.headers.accept;
+          }
+        }
+        return middleware(req, res, next);
+      };
+    },
+  },
 };
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);

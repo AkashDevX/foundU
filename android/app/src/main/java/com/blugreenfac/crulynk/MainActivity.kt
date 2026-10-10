@@ -2,6 +2,7 @@ package com.blugreenfac.crulynk
 
 import android.content.Intent
 import android.os.Bundle
+import com.blugreenfac.crulynk.documents.DocumentRenewalNotifier
 import com.blugreenfac.crulynk.shift.ShiftReminderNotifier
 import com.blugreenfac.crulynk.shift.ShiftReminderReceiver
 import com.blugreenfac.crulynk.shift.ShiftReminderScheduler
@@ -20,12 +21,21 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     handleShiftReminderIntent(intent)
+    handleDocumentRenewalIntent(intent)
   }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
     handleShiftReminderIntent(intent)
+    handleDocumentRenewalIntent(intent)
+  }
+
+  private fun handleDocumentRenewalIntent(intent: Intent?) {
+    val current = intent ?: return
+    if (!current.getBooleanExtra(DocumentRenewalNotifier.EXTRA_OPEN, false)) return
+    DocumentRenewalNotifier.markOpenRequested()
+    current.removeExtra(DocumentRenewalNotifier.EXTRA_OPEN)
   }
 
   private fun handleShiftReminderIntent(intent: Intent?) {

@@ -9,7 +9,9 @@ import {
   RefreshControl,
   StyleSheet,
   Pressable,
-  Animated,
+  BackHandler,
+  Image,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -22,11 +24,18 @@ import { getDisplayProfilePhotoUri } from '../../services/accountProfileStorage'
 import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
+import { TrainingQuizQuestion } from '../../components/TrainingQuizQuestion';
+import { TrainingSlideBlocks } from '../../components/TrainingSlideBlocks';
 import { TrainingSlideImage } from '../../components/TrainingSlideImage';
+import type { TrainingBlock } from '../../types/training';
 import {
   acknowledgeTrainingMaterials,
   fetchAssignedTrainings,
   fetchTrainingDetail,
+  finishTraining,
+  quizDraftAnswered,
+  quizDraftToAnswer,
+  retakeTraining,
   submitTrainingAnswers,
   trainingPageImageUrl,
   trainingSectionImageUrl,
@@ -34,15 +43,19 @@ import {
 import type {
   TrainingBand,
   TrainingDetail,
+  TrainingQuizDraft,
   TrainingSummary,
 } from '../../types/training';
 import { SweetAlert } from '../../components/SweetAlert';
+import { SignaturePad, SignaturePreview, type SignatureDrawing } from '../../components/SignaturePad';
+import { TRAINING_ASSIGNED_EVENT } from '../../services/chatPush';
 
 type TrainingScreenProps = {
   isTabActive?: boolean;
 };
 
-type ViewMode = 'list' | 'detail' | 'reader' | 'quiz' | 'result';
+type ViewMode = 'list' | 'certificates' | 'detail' | 'reader' | 'quiz' | 'sign' | 'result' | 'certificate';
+type CertificateOrigin = 'certificates' | 'result' | 'detail';
 type FilterKey = 'all' | 'pending' | 'completed';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -61,6 +74,10 @@ function statusLabel(status: TrainingSummary['status']): string {
       return 'Quiz ready';
     case 'studying':
       return 'Studying';
+    case 'pending_review':
+      return 'Needs review';
+    case 'failed':
+      return 'Failed';
     default:
       return 'Not started';
   }
@@ -87,9 +104,81 @@ function formatPercent(value: number | null | undefined): string {
   return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
 }
 
+function SlidePieces({
+  layout,
+  title,
+  body,
+  bullets,
+  hasImage,
+  imageUrl,
+  blocks,
+  includeTitle,
+}: {
+  layout: string[];
+  title: string;
+  body: string;
+  bullets: string[];
+  hasImage: boolean;
+  imageUrl: string;
+  blocks: TrainingBlock[];
+  includeTitle: boolean;
+}) {
+  const blockMap = new Map(blocks.map((block) => [block.id, block]));
+  const used = new Set<number>();
+  return (
+    <>
+      {layout.map((token, index) => {
+        const key = `${token}-${index}`;
+        if (token === 'title') {
+          if (!includeTitle) return null;
+          return (
+            <Text key={key} style={styles.readerTitle}>
+              {title}
+            </Text>
+          );
+        }
+        if (token === 'body') {
+          if (body.trim().length === 0) return null;
+          return (
+            <Text key={key} style={includeTitle ? styles.readerBody : styles.sectionBody}>
+              {body}
+            </Text>
+          );
+        }
+        if (token === 'bullets') {
+          if (bullets.length === 0) return null;
+          return (
+            <View key={key} style={styles.bulletList}>
+              {bullets.map((line, bulletIndex) => (
+                <View key={`${key}-${bulletIndex}`} style={styles.bulletRow}>
+                  <View style={styles.bulletDot} />
+                  <Text style={styles.bulletText}>{line}</Text>
+                </View>
+              ))}
+            </View>
+          );
+        }
+        if (token === 'image') {
+          if (!hasImage) return null;
+          return <TrainingSlideImage key={key} url={imageUrl} />;
+        }
+        if (token.startsWith('block:')) {
+          const block = blockMap.get(Number(token.slice(6)));
+          if (!block) return null;
+          used.add(block.id);
+          return <TrainingSlideBlocks key={key} blocks={[block]} />;
+        }
+        return null;
+      })}
+      <TrainingSlideBlocks blocks={blocks.filter((block) => !used.has(block.id))} />
+    </>
+  );
+}
+
 function formatTimer(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  const safe = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
@@ -104,27 +193,45 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [trainings, setTrainings] = useState<TrainingSummary[]>([]);
   const [detail, setDetail] = useState<TrainingDetail | null>(null);
+  const [certificateOrigin, setCertificateOrigin] = useState<CertificateOrigin>('result');
   const [pageIndex, setPageIndex] = useState(0);
   const [quizIndex, setQuizIndex] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(DEFAULT_QUESTION_SECONDS);
+  const [timerPaused, setTimerPaused] = useState(false);
   const [viewedPageIds, setViewedPageIds] = useState<Set<number>>(new Set());
+  const [retakeSlidesDone, setRetakeSlidesDone] = useState(false);
   const [expandedSectionIds, setExpandedSectionIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [alert, setAlert] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    hideCancel?: boolean;
+    variant?: 'success' | 'error' | 'info' | 'warning' | 'danger';
+    onConfirm?: () => void;
+  } | null>(null);
+  const [answers, setAnswers] = useState<Record<number, TrainingQuizDraft>>({});
 
   const answersRef = useRef(answers);
   answersRef.current = answers;
   const submittingRef = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
-  const timerPulse = useRef(new Animated.Value(1)).current;
+  const signatureRef = useRef<SignatureDrawing | null>(null);
+  const quizIndexRef = useRef(0);
+  const deadlineRef = useRef<number | null>(null);
+  const pausedRemainingRef = useRef<number | null>(null);
+  const advanceRef = useRef<
+    (fromIndex: number, answerMap: Record<number, TrainingQuizDraft>) => void
+  >(() => {});
+  const [timerTrackWidth, setTimerTrackWidth] = useState(0);
 
   const questionSeconds = Math.max(
     10,
-    detail?.assignment.question_time_seconds ?? DEFAULT_QUESTION_SECONDS,
+    Number(detail?.assignment.question_time_seconds) || DEFAULT_QUESTION_SECONDS,
   );
 
   const loadList = useCallback(async (opts?: { soft?: boolean }) => {
@@ -148,88 +255,161 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTabActive]);
 
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(TRAINING_ASSIGNED_EVENT, () => {
+      if (view === 'list') void loadList({ soft: true });
+    });
+    return () => sub.remove();
+  }, [view, loadList]);
+
+  useEffect(() => {
+    if (!isTabActive || view !== 'result' || !detail) return;
+    let cancelled = false;
+    const assignmentId = detail.assignment.id;
+    fetchTrainingDetail(assignmentId).then((result) => {
+      if (cancelled || !result.ok) return;
+      setDetail((current) => {
+        if (current?.result && result.detail.result == null) {
+          return {
+            ...current,
+            assignment: {
+              ...current.assignment,
+              can_retry: result.detail.assignment.can_retry,
+              attempts_remaining: result.detail.assignment.attempts_remaining,
+              attempts_used: result.detail.assignment.attempts_used,
+              max_attempts: result.detail.assignment.max_attempts,
+            },
+            induction: result.detail.induction ?? current.induction,
+          };
+        }
+        return result.detail;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Refresh a failed result so a new try limit shows without leaving this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTabActive, view, detail?.assignment.id]);
+
   // Keep the new page / question at the top after Next / Previous.
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [view, pageIndex, quizIndex]);
 
   const submitQuizWithAnswers = useCallback(
-    async (answerMap: Record<number, number>) => {
+    async (answerMap: Record<number, TrainingQuizDraft>, signature?: SignatureDrawing | null) => {
       if (!detail || submittingRef.current) return;
       submittingRef.current = true;
       setBusy(true);
       const payload = detail.questions
-        .filter((q) => answerMap[q.id] != null)
-        .map((q) => ({
-          question_id: q.id,
-          option_id: answerMap[q.id],
-        }));
-      const result = await submitTrainingAnswers(detail.assignment.id, payload);
-      setBusy(false);
-      submittingRef.current = false;
+        .map((question) => quizDraftToAnswer(question, answerMap[question.id]))
+        .filter((row): row is Record<string, unknown> => row !== null);
+      const result = await submitTrainingAnswers(detail.assignment.id, payload, signature);
       if (!result.ok) {
+        const alreadySubmitted = result.message.toLowerCase().includes('already been submitted');
+        if (alreadySubmitted) {
+          const again = await fetchTrainingDetail(detail.assignment.id);
+          const status = again.ok ? again.detail.assignment.status : null;
+          if (
+            again.ok &&
+            (again.detail.result != null ||
+              again.detail.assignment.submitted_at != null ||
+              status === 'completed' ||
+              status === 'failed' ||
+              status === 'pending_review')
+          ) {
+            setDetail(again.detail);
+            setView('result');
+            setBusy(false);
+            submittingRef.current = false;
+            return;
+          }
+        }
+        setBusy(false);
+        submittingRef.current = false;
         setAlert({ title: 'Could not submit', message: result.message });
         return;
       }
       setDetail(result.detail);
       setView('result');
+      setBusy(false);
+      submittingRef.current = false;
     },
     [detail],
   );
 
   const advanceOrSubmit = useCallback(
-    (fromIndex: number, answerMap: Record<number, number>) => {
+    (fromIndex: number, answerMap: Record<number, TrainingQuizDraft>) => {
       if (!detail) return;
       if (fromIndex >= detail.questions.length - 1) {
-        void submitQuizWithAnswers(answerMap);
+        signatureRef.current = null;
+        setView('sign');
         return;
       }
       setQuizIndex(fromIndex + 1);
       setSecondsLeft(questionSeconds);
     },
-    [detail, questionSeconds, submitQuizWithAnswers],
+    [detail, questionSeconds],
   );
 
-  // Per-question countdown while on quiz.
+  advanceRef.current = advanceOrSubmit;
+  quizIndexRef.current = quizIndex;
+
+  // Fresh deadline for each question. Pause stores the remaining time so the
+  // leave dialog does not eat the countdown or freeze the next attempt.
+  useEffect(() => {
+    if (view !== 'quiz' || !detail || detail.questions.length === 0) {
+      deadlineRef.current = null;
+      pausedRemainingRef.current = null;
+      return;
+    }
+    const total = Math.max(10, Number(questionSeconds) || DEFAULT_QUESTION_SECONDS);
+    deadlineRef.current = Date.now() + total * 1000;
+    pausedRemainingRef.current = null;
+    setSecondsLeft(total);
+  }, [view, quizIndex, detail?.assignment.id, detail?.questions.length, questionSeconds]);
+
   useEffect(() => {
     if (view !== 'quiz' || !detail || detail.questions.length === 0) return;
 
-    setSecondsLeft(questionSeconds);
-    let remaining = questionSeconds;
-    const id = setInterval(() => {
-      remaining -= 1;
-      setSecondsLeft(remaining);
-      if (remaining <= 0) {
-        clearInterval(id);
-        advanceOrSubmit(quizIndex, answersRef.current);
+    if (timerPaused) {
+      if (deadlineRef.current != null) {
+        pausedRemainingRef.current = Math.max(0, deadlineRef.current - Date.now());
       }
-    }, 1000);
+      return;
+    }
 
+    if (pausedRemainingRef.current != null) {
+      deadlineRef.current = Date.now() + pausedRemainingRef.current;
+      pausedRemainingRef.current = null;
+    }
+    if (deadlineRef.current == null) {
+      const total = Math.max(10, Number(questionSeconds) || DEFAULT_QUESTION_SECONDS);
+      deadlineRef.current = Date.now() + total * 1000;
+    }
+
+    let movedOn = false;
+    const tick = () => {
+      if (movedOn || deadlineRef.current == null) return;
+      const left = Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000));
+      setSecondsLeft((prev) => (prev === left ? prev : left));
+      if (left <= 0) {
+        movedOn = true;
+        advanceRef.current(quizIndexRef.current, answersRef.current);
+      }
+    };
+
+    tick();
+    const id = setInterval(tick, 250);
     return () => clearInterval(id);
-    // Only reset timer when question index / quiz view changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, quizIndex, detail?.assignment.id]);
-
-  useEffect(() => {
-    if (view !== 'quiz') return;
-    const urgent = secondsLeft <= 10;
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(timerPulse, {
-          toValue: urgent ? 1.08 : 1,
-          duration: urgent ? 400 : 1,
-          useNativeDriver: true,
-        }),
-        Animated.timing(timerPulse, {
-          toValue: 1,
-          duration: urgent ? 400 : 1,
-          useNativeDriver: true,
-        }),
-      ]),
-    ).start();
-  }, [secondsLeft, view, timerPulse]);
+  }, [view, quizIndex, detail?.assignment.id, detail?.questions.length, timerPaused, questionSeconds]);
 
   const onRefresh = useCallback(() => {
+    if (view === 'quiz' || view === 'sign') {
+      setRefreshing(false);
+      return;
+    }
     setRefreshing(true);
     if (view === 'list') {
       loadList({ soft: true });
@@ -246,6 +426,22 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
     }
   }, [view, detail, loadList]);
 
+  const openCertificate = useCallback(async (item: TrainingSummary) => {
+    setBusy(true);
+    const result = await fetchTrainingDetail(item.id);
+    setBusy(false);
+    if (!result.ok || !result.detail.assignment.certificate) {
+      setAlert({
+        title: 'Could not open certificate',
+        message: result.ok ? 'This certificate is no longer available.' : result.message,
+      });
+      return;
+    }
+    setDetail(result.detail);
+    setCertificateOrigin('certificates');
+    setView('certificate');
+  }, []);
+
   const openAssignment = useCallback(async (item: TrainingSummary) => {
     setBusy(true);
     const result = await fetchTrainingDetail(item.id);
@@ -254,15 +450,27 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
       setAlert({ title: 'Could not open training', message: result.message });
       return;
     }
-    setDetail(result.detail);
+    const next = result.detail;
+    setDetail(next);
     setAnswers({});
     setPageIndex(0);
     setQuizIndex(0);
-    setViewedPageIds(new Set());
     setExpandedSectionIds(new Set());
-    if (result.detail.assignment.status === 'completed') {
+    setRetakeSlidesDone(false);
+    const status = next.assignment.status;
+    const retakeInProgress =
+      ((next.assignment.attempts_used ?? 0) > 0 || (next.induction?.attempts_used ?? 0) > 0) &&
+      status !== 'completed' &&
+      status !== 'failed' &&
+      status !== 'pending_review';
+    if (status === 'completed' || status === 'failed' || status === 'pending_review') {
+      setViewedPageIds(new Set());
       setView('result');
+    } else if (retakeInProgress && next.pages.length > 0) {
+      setViewedPageIds(new Set([next.pages[0].id]));
+      setView('reader');
     } else {
+      setViewedPageIds(new Set());
       setView('detail');
     }
   }, []);
@@ -277,24 +485,6 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
     setExpandedSectionIds(new Set());
     loadList({ soft: true });
   }, [loadList]);
-
-  const retryInduction = useCallback(async () => {
-    if (!detail) return;
-    setBusy(true);
-    const result = await fetchTrainingDetail(detail.assignment.id);
-    setBusy(false);
-    if (!result.ok) {
-      setAlert({ title: 'Could not start the next attempt', message: result.message });
-      return;
-    }
-    setDetail(result.detail);
-    setAnswers({});
-    setPageIndex(0);
-    setQuizIndex(0);
-    setViewedPageIds(new Set());
-    setExpandedSectionIds(new Set());
-    setView('detail');
-  }, [detail]);
 
   const startReader = useCallback(() => {
     if (!detail || detail.pages.length === 0) {
@@ -340,7 +530,11 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
     setDetail(nextDetail);
     setAnswers({});
     setQuizIndex(0);
-    setSecondsLeft(Math.max(10, nextDetail.assignment.question_time_seconds || DEFAULT_QUESTION_SECONDS));
+    setTimerPaused(false);
+    pausedRemainingRef.current = null;
+    const total = Math.max(10, Number(nextDetail.assignment.question_time_seconds) || DEFAULT_QUESTION_SECONDS);
+    deadlineRef.current = Date.now() + total * 1000;
+    setSecondsLeft(total);
     setView('quiz');
   }, []);
 
@@ -360,21 +554,120 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
       setAlert({ title: 'Could not unlock quiz', message: result.message });
       return;
     }
+    setRetakeSlidesDone(true);
     startQuiz(result.detail);
   }, [detail, viewedPageIds, startQuiz]);
 
-  const selectOption = useCallback((questionId: number, optionId: number) => {
-    setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
-  }, []);
+  const finishWithoutQuiz = useCallback(async () => {
+    if (!detail) return;
+    setBusy(true);
+    const result = await finishTraining(detail.assignment.id);
+    setBusy(false);
+    if (!result.ok) {
+      setAlert({ title: 'Could not finish', message: result.message });
+      return;
+    }
+    setDetail(result.detail);
+    setView('result');
+  }, [detail]);
+
+  const retryQuiz = useCallback(async () => {
+    if (!detail) return;
+    setBusy(true);
+    const result = await retakeTraining(detail.assignment.id);
+    setBusy(false);
+    if (!result.ok) {
+      setAlert({ title: 'Could not start the next attempt', message: result.message });
+      return;
+    }
+    const next = result.detail;
+    setDetail(next);
+    setAnswers({});
+    setPageIndex(0);
+    setQuizIndex(0);
+    setExpandedSectionIds(new Set());
+    setRetakeSlidesDone(false);
+    const status = next.assignment.status;
+    const finished = status === 'completed' || status === 'failed' || status === 'pending_review';
+    if (finished) {
+      setViewedPageIds(new Set());
+      setView('result');
+      return;
+    }
+    if (next.pages.length > 0) {
+      setViewedPageIds(new Set([next.pages[0].id]));
+      setView('reader');
+      return;
+    }
+    setViewedPageIds(new Set());
+    setView('detail');
+  }, [detail]);
+
+  const submitSigned = useCallback(() => {
+    const drawing = signatureRef.current;
+    if (!drawing || drawing.strokes.length === 0) {
+      setAlert({
+        title: 'Signature required',
+        message: 'Draw your signature in the box. It is placed on your certificate of completion.',
+      });
+      return;
+    }
+    void submitQuizWithAnswers(answersRef.current, drawing);
+  }, [submitQuizWithAnswers]);
+
+  const leaveQuiz = useCallback(async () => {
+    if (!detail || submittingRef.current) return;
+    submittingRef.current = true;
+    setAlert(null);
+    setBusy(true);
+    const payload = detail.questions
+      .map((question) => quizDraftToAnswer(question, answersRef.current[question.id]))
+      .filter((row): row is Record<string, unknown> => row !== null);
+    const result = await submitTrainingAnswers(detail.assignment.id, payload, null, true);
+    setBusy(false);
+    submittingRef.current = false;
+    if (!result.ok) {
+      setTimerPaused(false);
+      setAlert({ title: 'Could not leave', message: result.message });
+      return;
+    }
+    setDetail(result.detail);
+    setView('result');
+  }, [detail]);
+
+  const confirmLeaveQuiz = useCallback(() => {
+    setTimerPaused(true);
+    setAlert({
+      title: 'Leave quiz?',
+      message: 'If you leave now, this attempt will be marked as a fail.',
+      confirmText: 'Leave quiz',
+      cancelText: 'Stay',
+      hideCancel: false,
+      variant: 'danger',
+      onConfirm: () => {
+        void leaveQuiz();
+      },
+    });
+  }, [leaveQuiz]);
+
+  useEffect(() => {
+    if (view !== 'quiz' && view !== 'sign') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (alert) return true;
+      confirmLeaveQuiz();
+      return true;
+    });
+    return () => sub.remove();
+  }, [view, alert, confirmLeaveQuiz]);
 
   const onQuizNext = useCallback(() => {
     if (!detail) return;
     const question = detail.questions[quizIndex];
     if (!question) return;
-    if (answers[question.id] == null) {
+    if (!quizDraftAnswered(question, answers[question.id])) {
       setAlert({
-        title: 'Pick an answer',
-        message: 'Select an option before continuing, or wait for the timer to move on.',
+        title: 'Answer required',
+        message: 'Answer this question before continuing, or wait for the timer to move on.',
       });
       return;
     }
@@ -389,9 +682,21 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
 
   const pendingCount = trainings.filter((t) => t.status !== 'completed').length;
   const completedCount = trainings.filter((t) => t.status === 'completed').length;
+  const earnedCertificates = trainings.filter((item) => item.certificate);
 
-  const currentPage = detail?.pages[pageIndex] ?? null;
-  const currentQuestion = detail?.questions[quizIndex] ?? null;
+  const currentPage = detail?.pages?.[pageIndex] ?? null;
+  const currentQuestion = detail?.questions?.[quizIndex] ?? null;
+
+  useEffect(() => {
+    if (view !== 'quiz' || !currentQuestion || currentQuestion.question_type !== 'ordering') return;
+    setAnswers((prev) => {
+      if (prev[currentQuestion.id]?.order?.length) return prev;
+      return {
+        ...prev,
+        [currentQuestion.id]: { order: currentQuestion.options.map((option) => option.id) },
+      };
+    });
+  }, [view, currentQuestion]);
   const allPagesRead =
     !!detail && detail.pages.length > 0 && viewedPageIds.size >= detail.pages.length;
   const timerUrgent = secondsLeft <= 10;
@@ -404,9 +709,15 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
         ? 'Study'
         : view === 'quiz'
           ? `Q${quizIndex + 1}`
-          : view === 'result'
-            ? 'Results'
-            : detail?.assignment.title ?? 'Training';
+          : view === 'sign'
+            ? 'Sign'
+            : view === 'result'
+              ? 'Results'
+              : view === 'certificates'
+                ? 'Certificates'
+                : view === 'certificate'
+                  ? 'Certificate'
+                  : detail?.assignment.title ?? 'Training';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -432,14 +743,13 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
           <TouchableOpacity
             style={headerStyles.profileAvatarWrap}
             onPress={() => {
-              if (view === 'quiz') {
-                setAlert({
-                  title: 'Leave quiz?',
-                  message: 'Leaving now will lose this attempt progress. Finish the quiz if you can.',
-                });
+              if (view === 'quiz' || view === 'sign') {
+                confirmLeaveQuiz();
                 return;
               }
-              if (view === 'reader') setView('detail');
+              if (view === 'certificates') setView('list');
+              else if (view === 'certificate') setView(certificateOrigin);
+              else if (view === 'reader') setView('detail');
               else if (view === 'result') setView('detail');
               else goBackToList();
             }}
@@ -475,8 +785,11 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        removeClippedSubviews={false}
+        bounces={view !== 'sign'}
+        overScrollMode={view === 'sign' ? 'never' : 'auto'}
         refreshControl={
-          view === 'quiz' ? undefined : (
+          view === 'quiz' || view === 'sign' ? undefined : (
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           )
         }
@@ -501,6 +814,27 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                 </View>
               </View>
             </View>
+
+            {earnedCertificates.length > 0 ? (
+              <TouchableOpacity
+                style={styles.certEntry}
+                activeOpacity={0.85}
+                onPress={() => setView('certificates')}
+                accessibilityRole="button"
+                accessibilityLabel="Certificates"
+              >
+                <View style={styles.certEntryIcon}>
+                  <Feather name="award" size={20} color={colors.primary} />
+                </View>
+                <View style={styles.heroTextCol}>
+                  <Text style={styles.certEntryTitle}>Certificates</Text>
+                  <Text style={styles.certEntryHint}>
+                    {earnedCertificates.length} earned
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={20} color={colors.icon} />
+              </TouchableOpacity>
+            ) : null}
 
             <View style={styles.filterRow}>
               {FILTERS.map((f) => (
@@ -590,12 +924,58 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                             </Text>
                           </View>
                         ) : null}
+                        {item.can_retry ? (
+                          <View style={[styles.statusBadge, { backgroundColor: '#FEF2F2' }]}>
+                            <Text style={[styles.statusBadgeText, { color: '#B91C1C' }]}>
+                              Try again · {item.attempts_remaining ?? 0} left
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                     <Feather name="chevron-right" size={20} color={colors.icon} />
                   </TouchableOpacity>
                 );
               })
+            )}
+          </>
+        ) : null}
+
+        {view === 'certificates' ? (
+          <>
+            <Text style={styles.sectionTitle}>Your certificates</Text>
+            {earnedCertificates.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIconWrap}>
+                  <Feather name="award" size={28} color={colors.primary} />
+                </View>
+                <Text style={styles.emptyTitle}>No certificates yet</Text>
+                <Text style={styles.emptyHint}>Pass a training module to earn one.</Text>
+              </View>
+            ) : (
+              earnedCertificates.map((item) => (
+                <TouchableOpacity
+                  key={`certificate-${item.id}`}
+                  style={styles.card}
+                  activeOpacity={0.85}
+                  onPress={() => void openCertificate(item)}
+                  disabled={busy}
+                >
+                  <View style={styles.cardAccent} />
+                  <View style={styles.cardBody}>
+                    <Text style={styles.cardTitle}>{item.certificate?.training_name || item.title}</Text>
+                    <Text style={styles.cardDesc}>{item.certificate?.employee_name}</Text>
+                    {item.certificate?.completed_on_label ? (
+                      <Text style={styles.cardDesc}>Completed {item.certificate.completed_on_label}</Text>
+                    ) : null}
+                    {item.certificate?.expires_on_label ? (
+                      <Text style={styles.cardDesc}>Refresher {item.certificate.expires_on_label}</Text>
+                    ) : null}
+                    <Text style={styles.certificateListRef}>{item.certificate?.reference_number}</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={colors.icon} />
+                </TouchableOpacity>
+              ))
             )}
           </>
         ) : null}
@@ -634,33 +1014,74 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                   <Feather name="help-circle" size={18} color={colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.infoLabel}>Timed quiz</Text>
+                  <Text style={styles.infoLabel}>
+                    {detail.assignment.quiz_required === false ? 'Optional quiz' : 'Timed quiz'}
+                  </Text>
                   <Text style={styles.infoText}>
                     {detail.assignment.questions_count} questions ·{' '}
                     {detail.assignment.question_time_seconds}s each
+                    {detail.assignment.pass_percent != null ? ` · pass ${detail.assignment.pass_percent}%` : ''}
+                    {detail.assignment.allow_retakes && detail.assignment.max_attempts
+                      ? ` · ${detail.assignment.max_attempts} attempts`
+                      : ''}
                   </Text>
                 </View>
               </View>
             </View>
 
-            {detail.quiz_unlocked ? (
+            {(() => {
+              const retakeMustStudy =
+                !retakeSlidesDone &&
+                ((detail.assignment.attempts_used ?? 0) > 0 || (detail.induction?.attempts_used ?? 0) > 0) &&
+                detail.assignment.status !== 'completed' &&
+                detail.assignment.status !== 'failed' &&
+                detail.assignment.status !== 'pending_review';
+              if (retakeMustStudy || !detail.quiz_unlocked) {
+                return (
+                  <>
+                    {(detail.assignment.attempts_used ?? 0) > 0 || (detail.induction?.attempts_used ?? 0) > 0 ? (
+                      <Text style={styles.quizHint}>
+                        View every slide again. The next try opens only after the slides are finished.
+                      </Text>
+                    ) : null}
+                    <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={startReader}>
+                      <Text style={styles.primaryBtnText}>View slides</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              }
+              return (
               <TouchableOpacity
                 style={styles.primaryBtn}
                 activeOpacity={0.85}
                 onPress={() => {
-                  if (detail.assignment.status === 'completed') setView('result');
+                  const status = detail.assignment.status;
+                  if (status === 'completed' || status === 'failed' || status === 'pending_review') setView('result');
                   else startQuiz(detail);
                 }}
               >
                 <Text style={styles.primaryBtnText}>
-                  {detail.assignment.status === 'completed' ? 'View results' : 'Continue quiz'}
+                  {detail.assignment.status === 'completed' ||
+                  detail.assignment.status === 'failed' ||
+                  detail.assignment.status === 'pending_review'
+                    ? 'View results'
+                    : 'Continue quiz'}
                 </Text>
               </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={startReader}>
-                <Text style={styles.primaryBtnText}>View slides</Text>
+              );
+            })()}
+            {detail.assignment.certificate ? (
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setCertificateOrigin('detail');
+                  setView('certificate');
+                }}
+              >
+                <Text style={styles.secondaryBtnText}>View certificate</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
           </>
         ) : null}
 
@@ -681,29 +1102,55 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
             </View>
 
             <View style={styles.readerCard}>
-              {currentPage.has_image ? (
-                <TrainingSlideImage url={trainingPageImageUrl(currentPage.id)} />
-              ) : (
-                <View style={styles.slideBand}>
-                  <Text style={styles.slideBandIndex}>
-                    {String(pageIndex + 1).padStart(2, '0')}
-                  </Text>
-                </View>
-              )}
-              <Text style={styles.readerTitle}>{currentPage.title}</Text>
-              {currentPage.body.trim().length > 0 ? (
-                <Text style={styles.readerBody}>{currentPage.body}</Text>
-              ) : null}
-              {currentPage.bullets.length > 0 ? (
-                <View style={styles.bulletList}>
-                  {currentPage.bullets.map((line, bulletIndex) => (
-                    <View key={`${currentPage.id}-${bulletIndex}`} style={styles.bulletRow}>
-                      <View style={styles.bulletDot} />
-                      <Text style={styles.bulletText}>{line}</Text>
+              {currentPage.layout ? (
+                <>
+                  {!currentPage.has_image &&
+                  !(currentPage.blocks ?? []).some((block) => block.kind === 'photo' && block.has_file) ? (
+                    <View style={styles.slideBand}>
+                      <Text style={styles.slideBandIndex}>
+                        {String(pageIndex + 1).padStart(2, '0')}
+                      </Text>
                     </View>
-                  ))}
-                </View>
-              ) : null}
+                  ) : null}
+                  <SlidePieces
+                    layout={currentPage.layout}
+                    title={currentPage.title}
+                    body={currentPage.body}
+                    bullets={currentPage.bullets}
+                    hasImage={currentPage.has_image}
+                    imageUrl={trainingPageImageUrl(currentPage.id)}
+                    blocks={currentPage.blocks ?? []}
+                    includeTitle
+                  />
+                </>
+              ) : (
+                <>
+                  {currentPage.has_image ? (
+                    <TrainingSlideImage url={trainingPageImageUrl(currentPage.id)} />
+                  ) : (
+                    <View style={styles.slideBand}>
+                      <Text style={styles.slideBandIndex}>
+                        {String(pageIndex + 1).padStart(2, '0')}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.readerTitle}>{currentPage.title}</Text>
+                  {currentPage.body.trim().length > 0 ? (
+                    <Text style={styles.readerBody}>{currentPage.body}</Text>
+                  ) : null}
+                  {currentPage.bullets.length > 0 ? (
+                    <View style={styles.bulletList}>
+                      {currentPage.bullets.map((line, bulletIndex) => (
+                        <View key={`${currentPage.id}-${bulletIndex}`} style={styles.bulletRow}>
+                          <View style={styles.bulletDot} />
+                          <Text style={styles.bulletText}>{line}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                  <TrainingSlideBlocks blocks={currentPage.blocks ?? []} />
+                </>
+              )}
 
               {currentPage.sections.length > 0 ? (
                 <View
@@ -731,12 +1178,28 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                         </Pressable>
                         {open ? (
                           <View style={styles.sectionPanel}>
-                            {section.body.trim().length > 0 ? (
-                              <Text style={styles.sectionBody}>{section.body}</Text>
-                            ) : null}
-                            {section.has_image ? (
-                              <TrainingSlideImage url={trainingSectionImageUrl(section.id)} />
-                            ) : null}
+                            {section.layout ? (
+                              <SlidePieces
+                                layout={section.layout}
+                                title={section.title}
+                                body={section.body}
+                                bullets={[]}
+                                hasImage={section.has_image}
+                                imageUrl={trainingSectionImageUrl(section.id)}
+                                blocks={section.blocks ?? []}
+                                includeTitle={false}
+                              />
+                            ) : (
+                              <>
+                                {section.body.trim().length > 0 ? (
+                                  <Text style={styles.sectionBody}>{section.body}</Text>
+                                ) : null}
+                                {section.has_image ? (
+                                  <TrainingSlideImage url={trainingSectionImageUrl(section.id)} />
+                                ) : null}
+                                <TrainingSlideBlocks blocks={section.blocks ?? []} />
+                              </>
+                            )}
                           </View>
                         ) : null}
                       </View>
@@ -769,18 +1232,32 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                   <Feather name="chevron-right" size={20} color="#FFFFFF" />
                 </TouchableOpacity>
               ) : (
+                <>
+                {detail.assignment.quiz_required === false ? (
+                  <TouchableOpacity
+                    style={[styles.navBtn, busy && styles.btnDisabled]}
+                    onPress={() => void finishWithoutQuiz()}
+                    disabled={busy}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.navBtnText}>Finish without quiz</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity
-                  style={[styles.navBtnPrimary, (!allPagesRead || busy) && styles.btnDisabled]}
+                  style={[styles.navBtnPrimary, (!allPagesRead || busy || detail.assignment.questions_count === 0) && styles.btnDisabled]}
                   onPress={onAcknowledge}
-                  disabled={!allPagesRead || busy}
+                  disabled={!allPagesRead || busy || detail.assignment.questions_count === 0}
                   activeOpacity={0.85}
                 >
                   {busy ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.navBtnPrimaryText}>Start timed quiz</Text>
+                    <Text style={styles.navBtnPrimaryText}>
+                      {detail.assignment.questions_count === 0 ? 'No quiz' : 'Start timed quiz'}
+                    </Text>
                   )}
                 </TouchableOpacity>
+                </>
               )}
             </View>
           </>
@@ -803,57 +1280,36 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                 </View>
               </View>
 
-              <Animated.View
-                style={[
-                  styles.timerBadge,
-                  timerUrgent && styles.timerBadgeUrgent,
-                  { transform: [{ scale: timerUrgent ? timerPulse : 1 }] },
-                ]}
-              >
+              <View style={[styles.timerBadge, timerUrgent && styles.timerBadgeUrgent]}>
                 <Feather name="clock" size={16} color={timerUrgent ? '#B91C1C' : colors.primary} />
                 <Text style={[styles.timerText, timerUrgent && styles.timerTextUrgent]}>
                   {formatTimer(secondsLeft)}
                 </Text>
-              </Animated.View>
+              </View>
             </View>
 
-            <View style={styles.timerBarTrack}>
+            <View
+              style={styles.timerBarTrack}
+              onLayout={(event) => {
+                const width = event.nativeEvent.layout.width;
+                setTimerTrackWidth((prev) => (prev === width ? prev : width));
+              }}
+            >
               <View
                 style={[
                   styles.timerBarFill,
                   timerUrgent && styles.timerBarUrgent,
-                  { width: `${Math.max(0, timerRatio * 100)}%` },
+                  { width: timerTrackWidth * Math.max(0, Math.min(1, timerRatio)) },
                 ]}
               />
             </View>
 
             <View style={styles.questionCardSolo}>
-              <Text style={styles.questionTextSolo}>{currentQuestion.question_text}</Text>
-              <View style={styles.optionsWrap}>
-                {currentQuestion.options.map((option, optIndex) => {
-                  const selected = answers[currentQuestion.id] === option.id;
-                  const letter = String.fromCharCode(65 + optIndex);
-                  return (
-                    <Pressable
-                      key={option.id}
-                      style={[styles.optionRowSolo, selected && styles.optionRowSoloSelected]}
-                      onPress={() => selectOption(currentQuestion.id, option.id)}
-                    >
-                      <View style={[styles.optionLetter, selected && styles.optionLetterSelected]}>
-                        <Text style={[styles.optionLetterText, selected && styles.optionLetterTextSelected]}>
-                          {letter}
-                        </Text>
-                      </View>
-                      <Text style={[styles.optionTextSolo, selected && styles.optionTextSoloSelected]}>
-                        {option.option_text}
-                      </Text>
-                      {selected ? (
-                        <Feather name="check" size={18} color={colors.primary} />
-                      ) : null}
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <TrainingQuizQuestion
+                question={currentQuestion}
+                draft={answers[currentQuestion.id]}
+                onChange={(draft) => setAnswers((prev) => ({ ...prev, [currentQuestion.id]: draft }))}
+              />
             </View>
 
             <TouchableOpacity
@@ -866,13 +1322,39 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.primaryBtnText}>
-                  {quizIndex >= detail.questions.length - 1 ? 'Finish & see results' : 'Next question'}
+                  {quizIndex >= detail.questions.length - 1 ? 'Sign certificate' : 'Next question'}
                 </Text>
               )}
             </TouchableOpacity>
             <Text style={styles.quizHint}>
               Unanswered questions when time runs out are marked incorrect.
             </Text>
+          </>
+        ) : null}
+
+        {view === 'sign' && detail ? (
+          <>
+            <View style={styles.detailHero}>
+              <Text style={styles.detailHeroTitle}>Sign your certificate</Text>
+              <Text style={styles.detailHeroDesc}>
+                Draw your signature . It is saved on the certificate of completion for {detail.assignment.title}.
+              </Text>
+            </View>
+            <View style={styles.signPad}>
+              <SignaturePad drawingRef={signatureRef} scrollRef={scrollRef} />
+            </View>
+            <TouchableOpacity
+              style={[styles.primaryBtn, busy && styles.btnDisabled]}
+              activeOpacity={0.85}
+              onPress={submitSigned}
+              disabled={busy}
+            >
+              {busy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryBtnText}>Submit training</Text>
+              )}
+            </TouchableOpacity>
           </>
         ) : null}
 
@@ -901,42 +1383,51 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
               );
             })()}
 
-            <Text style={styles.sectionTitle}>            Review</Text>
-            {detail.questions.map((question, index) => (
-              <View key={question.id} style={styles.questionCard}>
-                <View style={styles.reviewHeader}>
-                  <Text style={styles.questionIndex}>Question {index + 1}</Text>
-                  <Text
-                    style={[
-                      styles.reviewFlag,
-                      question.is_correct ? styles.reviewFlagOk : styles.reviewFlagBad,
-                    ]}
-                  >
-                    {question.is_correct ? 'Correct' : question.selected_option_id ? 'Incorrect' : 'Skipped'}
+            {detail.induction?.can_retry || detail.assignment.can_retry ? (
+              <>
+                <Text style={styles.quizHint}>
+                  Attempt {(detail.induction?.attempts_used ?? detail.assignment.attempts_used ?? 0)} of{' '}
+                  {detail.induction?.max_attempts ?? detail.assignment.max_attempts ?? 1}. You can take this quiz again.
+                </Text>
+                <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={() => void retryQuiz()} disabled={busy}>
+                  <Text style={styles.primaryBtnText}>
+                    Try again (
+                    {detail.induction?.can_retry
+                      ? detail.induction.attempts_remaining
+                      : detail.assignment.attempts_remaining ?? 0}{' '}
+                    left)
                   </Text>
-                </View>
-                <Text style={styles.questionText}>{question.question_text}</Text>
-                {question.options.map((option) => {
-                  const selected = question.selected_option_id === option.id;
-                  const correct = option.is_correct === true;
-                  return (
-                    <View
-                      key={option.id}
-                      style={[
-                        styles.optionRow,
-                        correct && styles.optionCorrect,
-                        selected && !correct && styles.optionWrong,
-                      ]}
-                    >
-                      <Text style={styles.optionText}>
-                        {correct ? '✓ ' : selected ? '✗ ' : ''}
-                        {option.option_text}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-            ))}
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {detail.assignment.quiz_waived || detail.result?.quiz_waived ? (
+              <Text style={styles.quizHint}>
+                Training complete. The quiz was optional, so this was recorded from the study pages.
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.sectionTitle}>Review</Text>
+                {detail.questions.map((question, index) => (
+                  <View key={question.id} style={styles.questionCard}>
+                    <Text style={styles.questionIndex}>Question {index + 1}</Text>
+                    <TrainingQuizQuestion question={question} reveal />
+                  </View>
+                ))}
+              </>
+            )}
+            {detail.assignment.status === 'completed' &&
+            detail.assignment.passed === false &&
+            detail.assignment.quiz_required === false ? (
+              <Text style={styles.quizHint}>
+                This quiz was optional, so the training is complete even though this attempt did not pass.
+              </Text>
+            ) : null}
+            {detail.result?.pending_review || detail.assignment.status === 'pending_review' ? (
+              <Text style={styles.quizHint}>
+                Some answers need an administrator to mark them. Your result updates after that review.
+              </Text>
+            ) : null}
 
             {detail.induction?.passed ? (
               <Text style={styles.quizHint}>
@@ -948,11 +1439,24 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
                 You have used all {detail.induction.max_attempts} attempts. Ask an administrator to reset them or grant an override.
               </Text>
             ) : null}
-            {detail.induction?.can_retry ? (
-              <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={() => void retryInduction()} disabled={busy}>
-                <Text style={styles.primaryBtnText}>
-                  Try again ({detail.induction.attempts_remaining} left)
-                </Text>
+            {!detail.induction?.is_induction &&
+            detail.assignment.status === 'failed' &&
+            !detail.assignment.can_retry &&
+            !detail.result?.pending_review ? (
+              <Text style={styles.quizHint}>
+                No tries left. Ask an administrator to allow another attempt.
+              </Text>
+            ) : null}
+            {detail.assignment.certificate ? (
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setCertificateOrigin('result');
+                  setView('certificate');
+                }}
+              >
+                <Text style={styles.primaryBtnText}>View certificate</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity style={styles.secondaryBtn} activeOpacity={0.85} onPress={goBackToList}>
@@ -960,18 +1464,70 @@ export function TrainingScreen({ isTabActive = true }: TrainingScreenProps) {
             </TouchableOpacity>
           </>
         ) : null}
+
+        {view === 'certificate' && detail?.assignment.certificate ? (
+          <View style={styles.certificateSheet}>
+            <View style={styles.certificateFrame}>
+              <Image
+                source={require('../../assets/crulynk-logo.png')}
+                style={styles.certificateLogo}
+                resizeMode="contain"
+                accessibilityLabel="CruLynk"
+              />
+              <Text style={styles.certificateCompany}>{detail.assignment.certificate.company_name}</Text>
+              <Text style={styles.certificateEyebrow}>Certificate of completion</Text>
+              <View style={styles.certificateRule} />
+              <Text style={styles.certificateLead}>This is to certify that</Text>
+              <Text style={styles.certificateName}>{detail.assignment.certificate.employee_name}</Text>
+              <Text style={styles.certificateLead}>has successfully completed</Text>
+              <Text style={styles.certificateTraining}>{detail.assignment.certificate.training_name}</Text>
+              <View style={styles.certificateDates}>
+                <View style={styles.certificateDateBlock}>
+                  <Text style={styles.certificateDateLabel}>Completion date</Text>
+                  <Text style={styles.certificateDateValue}>
+                    {detail.assignment.certificate.completed_on_label ?? '—'}
+                  </Text>
+                </View>
+                {detail.assignment.certificate.expires_on_label ? (
+                  <View style={styles.certificateDateBlock}>
+                    <Text style={styles.certificateDateLabel}>Valid until</Text>
+                    <Text style={styles.certificateDateValue}>
+                      {detail.assignment.certificate.expires_on_label}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.certificateRuleWide} />
+              <Text style={styles.certificateRefLabel}>Certificate number</Text>
+              <Text style={styles.certificateRef}>{detail.assignment.certificate.reference_number}</Text>
+              {detail.assignment.certificate.signature ? (
+                <View style={styles.certificateSignature}>
+                  <SignaturePreview drawing={detail.assignment.certificate.signature} plain />
+                  <Text style={styles.certificateDateLabel}>Employee signature</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
 
       <SweetAlert
         visible={!!alert}
         title={alert?.title ?? ''}
         message={alert?.message ?? ''}
-        confirmText="OK"
-        cancelText="Cancel"
-        hideCancel
-        variant="info"
-        onConfirm={() => setAlert(null)}
-        onClose={() => setAlert(null)}
+        confirmText={alert?.confirmText ?? 'OK'}
+        cancelText={alert?.cancelText ?? 'Cancel'}
+        hideCancel={alert?.hideCancel ?? true}
+        variant={alert?.variant ?? 'info'}
+        onConfirm={() => {
+          const action = alert?.onConfirm;
+          setAlert(null);
+          action?.();
+        }}
+        onClose={() => {
+          setTimerPaused(false);
+          setAlert(null);
+        }}
       />
     </View>
   );
@@ -1431,7 +1987,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.07,
     shadowRadius: 14,
     elevation: 4,
-    minHeight: 320,
+    minHeight: 160,
+    overflow: 'visible',
   },
   questionTextSolo: {
     fontFamily: fontFamily.semiBold,
@@ -1518,6 +2075,164 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semiBold,
     fontSize: 15,
     color: colors.primary,
+  },
+  certEntry: {
+    marginHorizontal: spacing.xxxl,
+    marginBottom: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 61, 122, 0.12)',
+  },
+  certEntryIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#E8F1FB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  certEntryTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: 16,
+    color: colors.text.primary,
+  },
+  certEntryHint: {
+    marginTop: 2,
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    color: colors.text.secondary,
+  },
+  certificateSheet: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xl,
+    backgroundColor: '#003D7A',
+    borderRadius: 8,
+    padding: 8,
+  },
+  certificateFrame: {
+    backgroundColor: '#FBF7EF',
+    borderWidth: 1,
+    borderColor: '#C4A35A',
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+  },
+  certificateLogo: {
+    width: 168,
+    height: 96,
+    marginBottom: spacing.sm,
+  },
+  certificateEyebrow: {
+    marginTop: spacing.md,
+    fontFamily: fontFamily.bold,
+    fontSize: 18,
+    letterSpacing: 0.4,
+    color: '#003D7A',
+    textAlign: 'center',
+  },
+  certificateLead: {
+    marginTop: spacing.md,
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    color: '#5C5346',
+    textAlign: 'center',
+  },
+  certificateCompany: {
+    marginTop: spacing.md,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: '#8A6A2F',
+    textAlign: 'center',
+  },
+  certificateName: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.bold,
+    fontSize: 28,
+    color: '#1C1915',
+    textAlign: 'center',
+  },
+  certificateTraining: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#003D7A',
+    textAlign: 'center',
+  },
+  certificateRule: {
+    marginTop: spacing.md,
+    width: 72,
+    height: 2,
+    backgroundColor: '#C4A35A',
+  },
+  certificateRuleWide: {
+    marginTop: spacing.xl,
+    width: '78%',
+    height: 1,
+    backgroundColor: '#C4A35A',
+  },
+  certificateDates: {
+    marginTop: spacing.xl,
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.xl,
+  },
+  certificateDateBlock: { alignItems: 'center', maxWidth: 150 },
+  certificateDateLabel: {
+    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: '#8A6A2F',
+    textAlign: 'center',
+  },
+  certificateDateValue: {
+    marginTop: 4,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    color: '#1C1915',
+    textAlign: 'center',
+  },
+  certificateRefLabel: {
+    marginTop: spacing.md,
+    fontFamily: fontFamily.bold,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: '#8A6A2F',
+  },
+  certificateRef: {
+    marginTop: 4,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    letterSpacing: 1.4,
+    color: '#003D7A',
+  },
+  certificateSignature: {
+    marginTop: spacing.lg,
+    width: '82%',
+    alignItems: 'center',
+  },
+  certificateListRef: {
+    marginTop: spacing.sm,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 12,
+    letterSpacing: 0.8,
+    color: colors.primary,
+  },
+  signPad: {
+    marginHorizontal: spacing.xxxl,
+    marginTop: spacing.lg,
   },
   btnDisabled: { opacity: 0.7 },
   questionCard: {

@@ -185,7 +185,7 @@ export function Step4EmploymentDetails({
         mediaType: 'photo',
         cameraType: 'back',
         saveToPhotos: false,
-        quality: 0.85,
+        quality: 0.8,
         maxWidth: 2400,
         maxHeight: 2400,
         assetRepresentationMode: 'compatible',

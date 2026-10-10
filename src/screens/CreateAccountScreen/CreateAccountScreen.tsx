@@ -328,7 +328,9 @@ export function CreateAccountScreen() {
 
       setSuccessMessage(formatApplicationResultsMessage(results, apiMessage || 'Your applications have been sent.'));
       setSubmitProgress(100);
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 400);
+      });
       setShowSuccessModal(true);
     } catch (e: unknown) {
       openRegistrationAlert('Application not sent', networkFailureMessage(e), 4, true, 'error');

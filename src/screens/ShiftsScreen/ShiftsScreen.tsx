@@ -41,6 +41,11 @@ import {
   submitTimeOffRequest,
   type TimeOffRequestItem,
 } from '../../services/timeOffApi';
+import {
+  fetchAvailableShifts,
+  requestAvailableShift,
+  type AvailableShiftItem,
+} from '../../services/availableShiftsApi';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { SweetAlert } from '../../components/SweetAlert';
@@ -51,7 +56,7 @@ import {
 } from '../../utils/weeklySchedule';
 import { appTodayLocalDate } from '../../utils/formatDateTime';
 
-type TabType = 'Upcoming' | 'Time off';
+type TabType = 'Upcoming' | 'Time off' | 'Available';
 
 function departmentLine(profile: UserProfileSnapshot): string {
   const name = profile.assignedDepartment?.trim();
@@ -383,6 +388,11 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [requestReason, setRequestReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [availableShifts, setAvailableShifts] = useState<AvailableShiftItem[]>([]);
+  const [availableLoading, setAvailableLoading] = useState(false);
+  const [requestingShiftId, setRequestingShiftId] = useState<number | null>(null);
+  const [availableNote, setAvailableNote] = useState('');
+  const [availableSubmitting, setAvailableSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
     title: string;
     message: string;
@@ -431,6 +441,20 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
     setTimeOffLoading(false);
   }, []);
 
+  const loadAvailableShifts = useCallback(async () => {
+    const signedIn = await getSessionAuthenticated();
+    if (!signedIn) {
+      setAvailableShifts([]);
+      return;
+    }
+    setAvailableLoading(true);
+    const result = await fetchAvailableShifts();
+    if (result.ok) {
+      setAvailableShifts(result.shifts);
+    }
+    setAvailableLoading(false);
+  }, []);
+
   const refreshAll = useCallback(
     async (week: string) => {
       const local = await loadAccountProfile();
@@ -441,8 +465,9 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
       if (api.ok) setProfile(api.profile);
       await loadSchedule(week);
       await loadTimeOffRequests();
+      await loadAvailableShifts();
     },
-    [loadSchedule, loadTimeOffRequests],
+    [loadSchedule, loadTimeOffRequests, loadAvailableShifts],
   );
 
   const submitRequest = useCallback(async () => {
@@ -463,6 +488,27 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
       setFeedback({ title: 'Could not submit', message: result.message, variant: 'error' });
     }
   }, [submitting, requestDate, requestReason, loadTimeOffRequests]);
+
+  const submitAvailableRequest = useCallback(async () => {
+    if (availableSubmitting || requestingShiftId == null) return;
+    const note = availableNote.trim();
+    if (note === '') {
+      setFeedback({ title: 'Add a note', message: 'Tell your manager why you want this shift.', variant: 'info' });
+      return;
+    }
+    setAvailableSubmitting(true);
+    const result = await requestAvailableShift(requestingShiftId, note);
+    setAvailableSubmitting(false);
+    if (result.ok) {
+      setRequestingShiftId(null);
+      setAvailableNote('');
+      setFeedback({ title: 'Request sent', message: result.message, variant: 'success' });
+      await loadAvailableShifts();
+    } else {
+      setFeedback({ title: 'Could not request shift', message: result.message, variant: 'error' });
+      await loadAvailableShifts();
+    }
+  }, [availableSubmitting, requestingShiftId, availableNote, loadAvailableShifts]);
 
   const dismissDatePicker = useCallback(() => setShowDatePicker(false), []);
 
@@ -575,6 +621,11 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
     if (!isTabActive || activeTab !== 'Time off') return;
     void loadTimeOffRequests();
   }, [isTabActive, activeTab, loadTimeOffRequests]);
+
+  useEffect(() => {
+    if (!isTabActive || activeTab !== 'Available') return;
+    void loadAvailableShifts();
+  }, [isTabActive, activeTab, loadAvailableShifts]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -906,6 +957,134 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
     </>
   );
 
+  const availableBody = isPendingApproval ? (
+    <View style={s.emptyCard}>
+      <Feather name="inbox" size={36} color="#D97706" />
+      <Text style={s.emptyTitle}>Awaiting organization approval</Text>
+      <Text style={s.emptyHint}>
+        Available shifts will show here once your organization approves your account.
+      </Text>
+    </View>
+  ) : (
+    <>
+      <View style={s.scheduleHeader}>
+        <Text style={s.sectionLabel}>AVAILABLE SHIFTS</Text>
+      </View>
+      <Text style={s.timeOffIntro}>
+        These shifts are open for anyone to pick up. Send a request with a note and your admin can approve it onto your roster.
+      </Text>
+
+      {availableLoading && availableShifts.length === 0 ? (
+        <View style={s.loadingCard}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={s.loadingText}>Loading available shifts…</Text>
+        </View>
+      ) : null}
+
+      {!availableLoading && availableShifts.length === 0 ? (
+        <View style={s.emptyCard}>
+          <Feather name="calendar" size={32} color="#9CA3AF" />
+          <Text style={s.emptyTitle}>No available shifts</Text>
+          <Text style={s.emptyHint}>When a manager offers a shift, it will show up here.</Text>
+        </View>
+      ) : null}
+
+      {availableShifts.map((item) => {
+        const taken = item.state === 'assigned';
+        const pending = item.my_request?.status === 'pending';
+        const rejected = item.my_request?.status === 'rejected';
+        const expanded = requestingShiftId === item.id;
+        return (
+          <View key={item.id} style={[s.timeOffCard, taken && s.availableCardTaken]}>
+            <View style={s.timeOffCardTop}>
+              <Text style={s.timeOffCardDate}>{item.date_label || item.scheduled_date || '—'}</Text>
+              <View style={[s.timeOffBadge, { backgroundColor: taken ? '#E5E7EB' : '#DBEAFE' }]}>
+                <Text style={[s.timeOffBadgeText, { color: taken ? '#374151' : '#1D4ED8' }]}>
+                  {taken ? 'ASSIGNED' : 'AVAILABLE'}
+                </Text>
+              </View>
+            </View>
+            {item.time_range ? <Text style={s.availableTime}>{item.time_range}</Text> : null}
+            <Text style={s.availableTitle}>{item.title}</Text>
+            {item.meta ? <Text style={s.availableMeta}>{item.meta}</Text> : null}
+            {item.original_employee_name ? (
+              <Text style={s.availableMeta}>Offered from {item.original_employee_name}</Text>
+            ) : null}
+            {item.status_label ? <Text style={s.availableMeta}>{item.status_label}</Text> : null}
+            {taken && item.assignment_note ? (
+              <Text style={s.availableAssignedNote}>{item.assignment_note}</Text>
+            ) : null}
+            {!taken && pending ? (
+              <View style={[s.timeOffBadge, { backgroundColor: '#FEF3C7', marginTop: 10, alignSelf: 'flex-start' }]}>
+                <Text style={[s.timeOffBadgeText, { color: '#92400E' }]}>REQUEST PENDING</Text>
+              </View>
+            ) : null}
+            {!taken && rejected ? (
+              <Text style={s.availableMeta}>
+                Your last request was declined
+                {item.my_request?.decision_note ? `: ${item.my_request.decision_note}` : '.'}
+              </Text>
+            ) : null}
+            {!taken && item.can_request && !expanded ? (
+              <TouchableOpacity
+                style={[s.requestBtn, { marginTop: 12 }]}
+                onPress={() => {
+                  setRequestingShiftId(item.id);
+                  setAvailableNote('');
+                }}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Request this shift"
+              >
+                <Feather name="plus-circle" size={18} color={colors.white} />
+                <Text style={s.requestBtnText}>{rejected ? 'Request again' : 'Request this shift'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!taken && expanded ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={s.formLabel}>NOTE FOR YOUR MANAGER</Text>
+                <TextInput
+                  style={s.reasonInput}
+                  value={availableNote}
+                  onChangeText={setAvailableNote}
+                  placeholder="e.g. I am free that day and can cover the site."
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                  maxLength={500}
+                />
+                <View style={s.formActions}>
+                  <TouchableOpacity
+                    style={s.formCancelBtn}
+                    onPress={() => {
+                      setRequestingShiftId(null);
+                      setAvailableNote('');
+                    }}
+                    activeOpacity={0.85}
+                    disabled={availableSubmitting}
+                  >
+                    <Text style={s.formCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.formSubmitBtn, availableSubmitting && s.formSubmitBtnDisabled]}
+                    onPress={() => void submitAvailableRequest()}
+                    activeOpacity={0.88}
+                    disabled={availableSubmitting}
+                  >
+                    {availableSubmitting ? (
+                      <ActivityIndicator size="small" color={colors.white} />
+                    ) : (
+                      <Text style={s.formSubmitText}>Send request</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
+    </>
+  );
+
   return (
     <View style={[s.container, { paddingTop: insets.top, paddingBottom: floatingTabBarClearance(insets.bottom) }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -940,7 +1119,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
 
       <View style={s.bodyPad}>
         <View style={s.segmentedWrap}>
-          {(['Upcoming', 'Time off'] as TabType[]).map((tab) => (
+          {(['Upcoming', 'Time off', 'Available'] as TabType[]).map((tab) => (
             <Pressable
               key={tab}
               style={[s.segmentedTab, activeTab === tab && s.segmentedTabActive]}
@@ -964,6 +1143,7 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
         >
           {activeTab === 'Upcoming' ? (screenReady ? upcomingBody : initialLoader) : null}
           {activeTab === 'Time off' ? timeOffBody : null}
+          {activeTab === 'Available' ? availableBody : null}
         </ScrollView>
       </View>
 
@@ -1016,7 +1196,7 @@ const s = StyleSheet.create({
   },
   segmentedTabText: {
     fontFamily: fontFamily.semiBold,
-    fontSize: 14,
+    fontSize: 13,
     color: '#6B7280',
   },
   segmentedTabTextActive: {
@@ -1728,5 +1908,34 @@ const s = StyleSheet.create({
     fontSize: 14,
     color: colors.text.primary,
     lineHeight: 20,
+  },
+  availableCardTaken: {
+    opacity: 0.72,
+  },
+  availableTime: {
+    marginTop: 8,
+    fontFamily: fontFamily.semiBold,
+    fontSize: 14,
+    color: colors.text.primary,
+  },
+  availableTitle: {
+    marginTop: 4,
+    fontFamily: fontFamily.bold,
+    fontSize: 15,
+    color: colors.text.primary,
+  },
+  availableMeta: {
+    marginTop: 4,
+    fontFamily: fontFamily.regular,
+    fontSize: 13,
+    color: colors.text.secondary,
+    lineHeight: 18,
+  },
+  availableAssignedNote: {
+    marginTop: 10,
+    fontFamily: fontFamily.medium,
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
   },
 });

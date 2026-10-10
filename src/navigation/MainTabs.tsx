@@ -7,6 +7,7 @@ import {
   Animated,
   LayoutChangeEvent,
   Platform,
+  Alert,
   AppState,
   DeviceEventEmitter,
   type AppStateStatus,
@@ -15,6 +16,7 @@ import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GeofenceAutoClockOutMonitor } from '../components/GeofenceAutoClockOutMonitor';
 import { BreakWindowMonitor } from '../components/BreakWindowMonitor';
+import { DocumentRenewalMonitor } from '../components/DocumentRenewalMonitor';
 import { ShiftComingSoonMonitor } from '../components/ShiftComingSoonMonitor';
 import { LogoutSweetAlertProvider } from '../context/LogoutSweetAlertContext';
 import { colors, fontFamily } from '../theme/theme';
@@ -26,7 +28,13 @@ import { ChatScreen } from '../screens/ChatScreen';
 import { FLOATING_TAB_BAR_BOTTOM_INSET } from './floatingTabBarMetrics';
 import { runWhenIdle } from '../utils/runWhenIdle';
 import { fetchConversations } from '../services/messagingApi';
-import { CHAT_INCOMING_EVENT, startChatPush } from '../services/chatPush';
+import {
+  CHAT_INCOMING_EVENT,
+  OPEN_TRAINING_TAB_EVENT,
+  startChatPush,
+  TRAINING_ASSIGNED_EVENT,
+} from '../services/chatPush';
+import { fetchAssignedTrainings } from '../services/trainingApi';
 
 const ACTIVE = colors.primary;
 const INACTIVE = '#94A3B8';
@@ -111,7 +119,11 @@ function TabItem({
       onLayout={onLayout}
       accessibilityRole="tab"
       accessibilityState={{ selected: isActive }}
-      accessibilityLabel={showBadge ? `${label}, ${badgeCount} unread` : label}
+      accessibilityLabel={
+        showBadge
+          ? `${label}, ${badgeCount} ${label === 'Train' ? 'to complete' : 'unread'}`
+          : label
+      }
     >
       <Animated.View
         style={[
@@ -151,10 +163,12 @@ function FloatingTabDock({
   activeTab,
   onChange,
   chatUnreadCount = 0,
+  trainingPendingCount = 0,
 }: {
   activeTab: MainTabKey;
   onChange: (key: MainTabKey) => void;
   chatUnreadCount?: number;
+  trainingPendingCount?: number;
 }) {
   const [layouts, setLayouts] = useState<Partial<Record<MainTabKey, TabLayout>>>({});
   const indicatorX = useRef(new Animated.Value(0)).current;
@@ -255,13 +269,29 @@ function FloatingTabDock({
               isActive={activeIndex === index}
               onPress={() => onChange(tab.key)}
               onLayout={(e) => onTabLayout(tab.key, e)}
-              badgeCount={tab.key === 'chat' ? chatUnreadCount : 0}
+              badgeCount={
+                tab.key === 'chat'
+                  ? chatUnreadCount
+                  : tab.key === 'training'
+                    ? trainingPendingCount
+                    : 0
+              }
             />
           ))}
         </View>
       </View>
     </Animated.View>
   );
+}
+
+function formatTrainingDue(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map((part) => Number(part));
+  if (!year || !month || !day) return isoDate;
+  return new Date(year, month - 1, day).toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 }
 
 /** Count of conversations that have at least one unread message. */
@@ -277,6 +307,7 @@ export function MainTabs() {
   const [mountedTabs, setMountedTabs] = useState<Set<MainTabKey>>(() => new Set(['dashboard']));
   const [monitorReady, setMonitorReady] = useState(false);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [trainingPendingCount, setTrainingPendingCount] = useState(0);
 
   const bottomOffset = useMemo(
     () => Math.max(insets.bottom, FLOATING_TAB_BAR_BOTTOM_INSET),
@@ -287,6 +318,29 @@ export function MainTabs() {
     const res = await fetchConversations();
     if (!res.ok) return;
     setChatUnreadCount(unreadChatCountFromInbox(res.data.conversations || []));
+  }, []);
+
+  const seenTrainingIds = useRef<Set<number> | null>(null);
+  const refreshTrainingBadge = useCallback(async () => {
+    const res = await fetchAssignedTrainings();
+    if (!res.ok) return;
+    setTrainingPendingCount(res.trainings.filter((item) => item.status !== 'completed').length);
+    const nextIds = new Set(res.trainings.map((item) => item.id));
+    const seen = seenTrainingIds.current;
+    seenTrainingIds.current = nextIds;
+    if (seen === null) return;
+    const assigned = res.trainings.filter(
+      (item) => item.due_date && item.status !== 'completed' && !seen.has(item.id),
+    );
+    if (assigned.length === 0) return;
+    const first = assigned[0];
+    const due = first.due_date ? formatTrainingDue(first.due_date) : '';
+    Alert.alert(
+      'Training assigned',
+      assigned.length === 1
+        ? `${first.title} has been assigned. Please complete it${due ? ` by ${due}` : ''}.`
+        : `${assigned.length} training modules have been assigned. Please complete them.`,
+    );
   }, []);
 
   useEffect(() => {
@@ -316,6 +370,19 @@ export function MainTabs() {
     return () => sub.remove();
   }, [refreshChatBadge]);
 
+  useEffect(() => {
+    const assigned = DeviceEventEmitter.addListener(TRAINING_ASSIGNED_EVENT, () => {
+      void refreshTrainingBadge();
+    });
+    const open = DeviceEventEmitter.addListener(OPEN_TRAINING_TAB_EVENT, () => {
+      setActiveTab('training');
+    });
+    return () => {
+      assigned.remove();
+      open.remove();
+    };
+  }, [refreshTrainingBadge]);
+
   // Badge sync while signed in — keep light so local `artisan serve` is not starved.
   // Skip while Chat is open (ChatScreen already polls the inbox).
   useEffect(() => {
@@ -327,7 +394,7 @@ export function MainTabs() {
       if (cancelled || inFlight || AppState.currentState !== 'active') return;
       inFlight = true;
       try {
-        await refreshChatBadge();
+        await Promise.all([refreshChatBadge(), refreshTrainingBadge()]);
       } finally {
         inFlight = false;
       }
@@ -347,20 +414,24 @@ export function MainTabs() {
       clearInterval(interval);
       sub.remove();
     };
-  }, [activeTab, refreshChatBadge]);
+  }, [activeTab, refreshChatBadge, refreshTrainingBadge]);
 
   // Refresh once after leaving Chat (messages may have been marked read).
   useEffect(() => {
     if (activeTab !== 'chat') {
       void refreshChatBadge();
     }
-  }, [activeTab, refreshChatBadge]);
+    if (activeTab !== 'training') {
+      void refreshTrainingBadge();
+    }
+  }, [activeTab, refreshChatBadge, refreshTrainingBadge]);
 
   return (
     <LogoutSweetAlertProvider>
       {monitorReady ? <GeofenceAutoClockOutMonitor /> : null}
       {monitorReady ? <ShiftComingSoonMonitor /> : null}
       {monitorReady ? <BreakWindowMonitor /> : null}
+      {monitorReady ? <DocumentRenewalMonitor /> : null}
 
       <View style={styles.container}>
         <View style={styles.screenStack}>
@@ -385,6 +456,7 @@ export function MainTabs() {
             activeTab={activeTab}
             onChange={setActiveTab}
             chatUnreadCount={chatUnreadCount}
+            trainingPendingCount={trainingPendingCount}
           />
         </View>
       </View>

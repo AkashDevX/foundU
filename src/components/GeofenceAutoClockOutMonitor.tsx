@@ -23,8 +23,10 @@ import {
   fetchTimeClockStatus,
   postAutoClockOut,
   postLocationPing,
+  activeShiftWorkLocation,
   resolveGeofenceRadiusM,
   resolveGeofenceSiteCoords,
+  workLocationCoords,
   type IdleAlertPayload,
   type TimeClockStatus,
 } from '../services/timeClockApi';
@@ -82,7 +84,13 @@ function siteCoordsForMonitoring(
   timeClock: TimeClockStatus,
   assigned: LatLng | null,
 ): LatLng | null {
-  return resolveGeofenceSiteCoords(assigned, timeClock.open_session);
+  const shiftSite = workLocationCoords(
+    activeShiftWorkLocation(timeClock.scheduled_shifts) ?? timeClock.work_location,
+  );
+  if ((timeClock.scheduled_shifts?.length ?? 0) > 0) {
+    return shiftSite;
+  }
+  return resolveGeofenceSiteCoords(shiftSite ?? assigned, timeClock.open_session);
 }
 
 /**
@@ -102,6 +110,9 @@ export function GeofenceAutoClockOutMonitor() {
 
   const monitoringRef = useRef(false);
   const autoClockOutInFlightRef = useRef(false);
+  const handleAutoClockOutSuccessRef = useRef<
+    ((timeClock: TimeClockStatus, message: string) => Promise<void>) | null
+  >(null);
   const pingInFlightRef = useRef(false);
   const lastPingAtRef = useRef(0);
   const localSamplesRef = useRef<LocationSamplePoint[]>([]);
@@ -212,6 +223,14 @@ export function GeofenceAutoClockOutMonitor() {
           }
           return;
         }
+        if (result.auto_clocked_out && result.time_clock) {
+          clockStateRef.current.isClockedIn = false;
+          await handleAutoClockOutSuccessRef.current?.(
+            result.time_clock,
+            result.message,
+          );
+          return;
+        }
         if (result.idle_alert) {
           const alert: IdleAlertPayload = result.idle_alert;
           showIdleMovementAlert(alert.message, alert.id);
@@ -248,6 +267,7 @@ export function GeofenceAutoClockOutMonitor() {
     },
     [clearWatch, showAutoClockOutAlert],
   );
+  handleAutoClockOutSuccessRef.current = handleAutoClockOutSuccess;
 
   const handlePositionSample = useCallback(
     async (lat: number, lng: number, accuracyMeters: number | null) => {
@@ -307,10 +327,12 @@ export function GeofenceAutoClockOutMonitor() {
   }, []);
 
   const applyClockState = useCallback((timeClock: TimeClockStatus, siteCoords: LatLng) => {
+    const site = activeShiftWorkLocation(timeClock.scheduled_shifts) ?? timeClock.work_location;
+    const siteRadius = site?.geofence_radius_meters;
     clockStateRef.current = {
       isClockedIn: true,
       siteCoords,
-      radiusM: resolveGeofenceRadiusM(timeClock),
+      radiusM: siteRadius != null && siteRadius > 0 ? siteRadius : resolveGeofenceRadiusM(timeClock),
     };
   }, []);
 
@@ -331,8 +353,12 @@ export function GeofenceAutoClockOutMonitor() {
   }, [handlePositionSample, readCurrentPosition]);
 
   const beginLocationWatch = useCallback(
-    async (timeClock: TimeClockStatus, siteCoords: LatLng) => {
+    async (timeClock: TimeClockStatus, siteCoords: LatLng, canBackground: boolean) => {
       applyClockState(timeClock, siteCoords);
+
+      if (canBackground) {
+        await startNativeLocationMonitoring();
+      }
 
       if (monitoringRef.current) {
         await evaluateAgainstCurrentSite();
@@ -340,7 +366,6 @@ export function GeofenceAutoClockOutMonitor() {
       }
 
       monitoringRef.current = true;
-      await startNativeLocationMonitoring();
       await evaluateAgainstCurrentSite();
 
       if (!clockStateRef.current.isClockedIn) {
@@ -388,25 +413,11 @@ export function GeofenceAutoClockOutMonitor() {
         return;
       }
 
-      if (monitoringRef.current || !canBackground) {
-        // Update site + evaluate now (covers reassignment while Dashboard shows Out of range).
-        await evaluateAgainstCurrentSite();
-        if (!canBackground) {
-          return;
-        }
-        if (monitoringRef.current) {
-          return;
-        }
-      }
-
-      await beginLocationWatch(timeClock, siteCoords);
+      // Foreground permission is enough to watch while the app is open.
+      // Background permission only adds the persistent location service.
+      await beginLocationWatch(timeClock, siteCoords, canBackground);
     },
-    [
-      applyClockState,
-      beginLocationWatch,
-      clearWatch,
-      evaluateAgainstCurrentSite,
-    ],
+    [applyClockState, beginLocationWatch, clearWatch],
   );
 
   const syncClockState = useCallback(async () => {
@@ -458,13 +469,11 @@ export function GeofenceAutoClockOutMonitor() {
       clearWatch();
     });
 
-    // Assignment reassigned mid-shift — pick up new site and clock out if now outside.
-    const unsubscribeAssignment = subscribeAssignmentChange((event) => {
+    // Assignment reassigned mid-shift — re-read the open shift's site.
+    // Profile pins are not used while a scheduled shift has its own location.
+    const unsubscribeAssignment = subscribeAssignmentChange(() => {
       if (!clockStateRef.current.isClockedIn) return;
-      const assigned = assignedCoordsFromProfile(event.profile);
-      if (!assigned) return;
-      clockStateRef.current.siteCoords = assigned;
-      void evaluateAgainstCurrentSite();
+      void syncClockState();
     });
 
     const onAppStateChange = (state: AppStateStatus) => {

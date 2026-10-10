@@ -11,6 +11,12 @@ export const navigationRef = createNavigationContainerRef();
 /** Fired when a chat or announcement push arrives while the app is open. */
 export const CHAT_INCOMING_EVENT = 'crulynk.chat.incoming';
 
+/** Fired when a training assignment push arrives. */
+export const TRAINING_ASSIGNED_EVENT = 'crulynk.training.assigned';
+
+/** Fired when the employee opens a training assignment notification. */
+export const OPEN_TRAINING_TAB_EVENT = 'crulynk.training.open';
+
 export type ChatIncomingPayload = {
   conversationId: number;
   kind: string;
@@ -24,6 +30,7 @@ let started = false;
 
 type RemoteMessageLike = {
   data?: Record<string, string | object | undefined>;
+  notification?: { title?: string; body?: string };
 } | null;
 
 function loadMessaging(): null | typeof import('@react-native-firebase/messaging') {
@@ -58,6 +65,36 @@ function emitIncomingChat(remoteMessage: RemoteMessageLike): void {
   const kind = typeof kindRaw === 'string' && kindRaw !== '' ? kindRaw : 'chat_message';
   const payload: ChatIncomingPayload = { conversationId, kind };
   DeviceEventEmitter.emit(CHAT_INCOMING_EVENT, payload);
+}
+
+function kindFromMessage(remoteMessage: RemoteMessageLike): string {
+  const kind = remoteMessage?.data?.kind ?? remoteMessage?.data?.type;
+  return typeof kind === 'string' ? kind : '';
+}
+
+function isTrainingAssigned(remoteMessage: RemoteMessageLike): boolean {
+  return kindFromMessage(remoteMessage) === 'training_assigned';
+}
+
+function openMyProfileFromPush(): void {
+  if (!navigationRef.isReady()) {
+    setTimeout(openMyProfileFromPush, 400);
+    return;
+  }
+  (navigationRef as { navigate: (name: string) => void }).navigate('MyProfile');
+}
+
+function routeOpenedNotification(remoteMessage: RemoteMessageLike): void {
+  if (isTrainingAssigned(remoteMessage)) {
+    DeviceEventEmitter.emit(OPEN_TRAINING_TAB_EVENT);
+    DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT);
+    return;
+  }
+  if (kindFromMessage(remoteMessage) === 'document_renewal') {
+    openMyProfileFromPush();
+    return;
+  }
+  openChatFromPush(remoteMessage);
 }
 
 export function openChatFromPush(remoteMessage: RemoteMessageLike): void {
@@ -144,10 +181,14 @@ export async function startChatPush(): Promise<void> {
     });
 
     openedUnsub = fb.onNotificationOpenedApp(messaging, (remoteMessage) => {
-      openChatFromPush(remoteMessage);
+      routeOpenedNotification(remoteMessage);
     });
 
     foregroundUnsub = fb.onMessage(messaging, async (remoteMessage) => {
+      if (isTrainingAssigned(remoteMessage)) {
+        DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT);
+        return;
+      }
       emitIncomingChat(remoteMessage);
       const id = conversationIdFromMessage(remoteMessage);
       if (id && activeConversationId === id) {
@@ -157,7 +198,7 @@ export async function startChatPush(): Promise<void> {
 
     const initial = await fb.getInitialNotification(messaging);
     if (initial) {
-      openChatFromPush(initial);
+      routeOpenedNotification(initial);
     }
   } catch (e) {
     started = false;

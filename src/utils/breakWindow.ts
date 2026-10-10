@@ -33,11 +33,11 @@ export function resolveBreakPhase(
 export function breakWindowDetail(phase: BreakWindowPhase): string | null {
   switch (phase) {
     case 'approaching':
-      return 'Your break window opens soon.';
+      return 'Your break time is coming up.';
     case 'open':
-      return 'Your break window is open now.';
+      return 'You can take your break now.';
     case 'closed':
-      return 'This break window has closed.';
+      return 'That break time has passed.';
     case 'taken':
       return 'You have taken your break.';
     default:
@@ -52,5 +52,5 @@ export function breakReminderCopy(
   if (kind === 'open') {
     return { title: 'Time for your break', message };
   }
-  return { title: 'Break window soon', message };
+  return { title: 'Break time soon', message };
 }

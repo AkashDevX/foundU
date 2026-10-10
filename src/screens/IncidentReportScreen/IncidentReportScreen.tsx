@@ -20,6 +20,7 @@ import * as ImagePicker from 'react-native-image-picker';
 import { createAccountScreenStyles } from '../../styles/styles';
 import { colors, fontFamily, spacing } from '../../theme/theme';
 import { SweetAlert } from '../../components/SweetAlert';
+import { SignaturePad, type SignatureDrawing } from '../../components/SignaturePad';
 import { ThemedDatePickerField, displayDateToIso, formatDateToDisplay } from '../../components/ThemedDatePickerField';
 import { appTodayLocalDate } from '../../utils/formatDateTime';
 import { ThemedTimePickerField } from '../../components/ThemedTimePickerField';
@@ -421,187 +422,6 @@ function PhotoPicker({
   );
 }
 
-type PenPoint = { x: number; y: number };
-type SignatureDrawing = { width: number; height: number; strokes: PenPoint[][] };
-
-function SignatureInk({ strokes }: { strokes: PenPoint[][] }) {
-  const ink: React.ReactNode[] = [];
-  strokes.forEach((stroke, strokeIndex) => {
-    stroke.forEach((point, index) => {
-      const next = stroke[index + 1];
-      if (!next) {
-        ink.push(
-          <View
-            key={`${strokeIndex}-dot-${index}`}
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: point.x - 4,
-              top: point.y - 4,
-              width: 8,
-              height: 8,
-              borderRadius: 4,
-              backgroundColor: '#111827',
-            }}
-          />,
-        );
-        return;
-      }
-      const dx = next.x - point.x;
-      const dy = next.y - point.y;
-      const length = Math.hypot(dx, dy);
-      if (length < 0.4) return;
-      ink.push(
-        <View
-          key={`${strokeIndex}-line-${index}`}
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: (point.x + next.x) / 2 - length / 2,
-            top: (point.y + next.y) / 2 - 2,
-            width: length,
-            height: 4,
-            borderRadius: 2,
-            backgroundColor: '#111827',
-            transform: [{ rotate: `${Math.atan2(dy, dx)}rad` }],
-          }}
-        />,
-      );
-    });
-  });
-  return (
-    <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}>
-      {ink}
-    </View>
-  );
-}
-
-function SignaturePad({
-  drawingRef,
-  scrollRef,
-}: {
-  drawingRef: React.MutableRefObject<SignatureDrawing | null>;
-  scrollRef: React.RefObject<ScrollView | null>;
-}) {
-  const sizeRef = useRef({ width: 320, height: 160 });
-  const strokesRef = useRef<PenPoint[][]>(drawingRef.current?.strokes ?? []);
-  const [strokes, setStrokes] = useState<PenPoint[][]>(strokesRef.current);
-
-  const save = (next: PenPoint[][]) => {
-    strokesRef.current = next;
-    drawingRef.current = {
-      width: sizeRef.current.width,
-      height: sizeRef.current.height,
-      strokes: next,
-    };
-  };
-
-  const paint = () => {
-    setStrokes(strokesRef.current.map((stroke) => stroke.slice()));
-  };
-
-  const clampPoint = (x: number, y: number): PenPoint | null => {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    return {
-      x: Math.max(0, Math.min(sizeRef.current.width, x)),
-      y: Math.max(0, Math.min(sizeRef.current.height, y)),
-    };
-  };
-
-  const addPoint = (x: number, y: number, isNewStroke: boolean) => {
-    const point = clampPoint(x, y);
-    if (!point) return;
-    const current = strokesRef.current;
-    if (isNewStroke || current.length === 0) {
-      save([...current, [point]]);
-      paint();
-      return;
-    }
-    const stroke = current[current.length - 1];
-    const previous = stroke[stroke.length - 1];
-    if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 1.2) return;
-    const next = current.slice();
-    next[next.length - 1] = [...stroke, point];
-    save(next);
-    paint();
-  };
-
-  const lockScroll = (enabled: boolean) => {
-    scrollRef.current?.setNativeProps({ scrollEnabled: enabled });
-  };
-
-  return (
-    <View style={{ marginBottom: spacing.lg }}>
-      <FieldLabel label="Signature *" hint="Draw your signature in the box. The page stays still while you sign." />
-      <View
-        collapsable={false}
-        onLayout={(event) => {
-          const { width, height } = event.nativeEvent.layout;
-          if (width > 0 && height > 0) sizeRef.current = { width, height };
-        }}
-        onTouchStart={() => lockScroll(false)}
-        onTouchEnd={() => lockScroll(true)}
-        onTouchCancel={() => lockScroll(true)}
-        onStartShouldSetResponder={() => true}
-        onStartShouldSetResponderCapture={() => true}
-        onMoveShouldSetResponder={() => true}
-        onMoveShouldSetResponderCapture={() => true}
-        onResponderTerminationRequest={() => false}
-        onResponderGrant={(event) => {
-          lockScroll(false);
-          addPoint(event.nativeEvent.locationX, event.nativeEvent.locationY, true);
-        }}
-        onResponderMove={(event) => {
-          addPoint(event.nativeEvent.locationX, event.nativeEvent.locationY, false);
-        }}
-        onResponderRelease={() => {
-          lockScroll(true);
-          paint();
-        }}
-        onResponderTerminate={() => {
-          lockScroll(true);
-          paint();
-        }}
-        style={{
-          height: 160,
-          borderRadius: 12,
-          borderWidth: 1,
-          borderColor: '#111827',
-          backgroundColor: '#FFFFFF',
-          overflow: 'hidden',
-        }}
-      >
-          <SignatureInk strokes={strokes} />
-          <Text
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: 16,
-              top: 16,
-              fontFamily: fontFamily.regular,
-              color: '#9CA3AF',
-              opacity: strokes.length === 0 ? 1 : 0,
-            }}
-          >
-            Sign here
-          </Text>
-      </View>
-      {strokes.length > 0 ? (
-        <TouchableOpacity
-          onPress={() => {
-            save([]);
-            paint();
-          }}
-        >
-          <Text style={{ marginTop: 8, fontFamily: fontFamily.semiBold, color: colors.accent }}>Clear signature</Text>
-        </TouchableOpacity>
-      ) : (
-        <View style={{ height: 28 }} />
-      )}
-    </View>
-  );
-}
-
 function SubmitProgress({ percent }: { percent: number }) {
   const shown = Math.max(0, Math.min(100, Math.round(percent)));
   const stage = shown >= 100 ? 'Submitted' : shown >= 92 ? 'Finishing up' : shown >= 8 ? 'Uploading your report' : 'Preparing your report';
@@ -829,7 +649,9 @@ export function IncidentReportScreen() {
       return;
     }
     setSubmitProgress(100);
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 450);
+    });
     setSubmitting(false);
     setSubmitProgress(null);
     setAlert({ title: 'Report submitted', message: result.message, variant: 'success' });

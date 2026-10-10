@@ -103,6 +103,17 @@ export type UserProfileSnapshot = {
   vehicleRegistration?: string;
   vehicleExpiry?: string;
   vehicleInsuranceUploaded?: string;
+  /**
+   * Documents whose expiry is within 30 days, or already past.
+   * Present (possibly empty) when `GET /api/v1/me` sent `document_renewals`.
+   */
+  documentRenewals?: {
+    key: string;
+    label: string;
+    expiry: string;
+    daysUntil: number;
+    status: 'expiring' | 'expired';
+  }[];
   /** Only used when submitting registration to the API — never persist to AsyncStorage. */
   password?: string;
   password_confirmation?: string;

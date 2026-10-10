@@ -10,11 +10,20 @@ export const GEOFENCE_EXIT_CONFIRM_READINGS = 1;
  */
 export const GEOFENCE_EXIT_MIN_DURATION_MS = 0;
 
-/** Cap on how much GPS accuracy can expand the effective geofence. */
-export const GEOFENCE_ACCURACY_BUFFER_CAP_M = 100;
+/**
+ * @deprecated GPS accuracy no longer expands the site radius.
+ * Kept so older imports still resolve.
+ */
+export const GEOFENCE_ACCURACY_BUFFER_CAP_M = 0;
 
-/** Ignore exit samples when reported GPS accuracy is worse than this. */
-export const GEOFENCE_MAX_USABLE_ACCURACY_M = 80;
+/**
+ * @deprecated Exit uses the work-location radius as set.
+ * Keep in sync with AutoClockOut::isOutside() on the server.
+ */
+export const GEOFENCE_MAX_USABLE_ACCURACY_M = 0;
+
+/** @deprecated Exit no longer adds a cushion past the site radius. */
+export const GEOFENCE_EXIT_CUSHION_CAP_M = 0;
 
 /** How often to refresh assignment + re-check geofence while clocked in. */
 export const GEOFENCE_POLL_INTERVAL_MS = 10_000;
@@ -39,63 +48,58 @@ export function haversineDistanceM(
   return R * c;
 }
 
-function accuracyBufferM(accuracyMeters?: number | null): number {
-  return Math.min(Math.max(accuracyMeters ?? 0, 0), GEOFENCE_ACCURACY_BUFFER_CAP_M);
-}
-
-/** Effective radius used for clock-in / "in zone" display / auto clock-out. */
+/** The boundary is the radius saved on the work location. GPS accuracy is not added. */
 export function effectiveEnterRadiusM(
   radiusM: number,
-  accuracyMeters?: number | null,
+  _accuracyMeters?: number | null,
 ): number {
-  return radiusM + accuracyBufferM(accuracyMeters);
+  return radiusM;
 }
 
-/** Same as enter radius — leave the zone and auto clock-out fires immediately. */
+/** Auto clock-out uses the same work-location radius. GPS accuracy is not added. */
 export function effectiveExitRadiusM(
   radiusM: number,
-  accuracyMeters?: number | null,
+  _accuracyMeters?: number | null,
 ): number {
-  return effectiveEnterRadiusM(radiusM, accuracyMeters);
+  return radiusM;
 }
 
 export function isInsideGeofence(
   user: LatLng,
   site: LatLng,
   radiusM: number,
-  accuracyMeters?: number | null,
+  _accuracyMeters?: number | null,
 ): boolean {
   const distanceM = haversineDistanceM(user.lat, user.lng, site.lat, site.lng);
-  return distanceM <= effectiveEnterRadiusM(radiusM, accuracyMeters);
+  return distanceM <= radiusM;
 }
 
 /**
- * True when beyond the geofence radius (same rule as the Out of range badge).
- * Poor GPS accuracy no longer blocks a clear exit (e.g. reassigned site far away).
+ * True when the employee is farther from the site than that site's radius.
+ * Keep in sync with AutoClockOut::isOutside() on the server.
  */
 export function isOutsideGeofence(
   user: LatLng,
   site: LatLng,
   radiusM: number,
-  accuracyMeters?: number | null,
+  _accuracyMeters?: number | null,
 ): boolean {
-  return !isInsideGeofence(user, site, radiusM, accuracyMeters);
+  const distanceM = haversineDistanceM(user.lat, user.lng, site.lat, site.lng);
+  return distanceM > radiusM;
 }
 
 export function formatZoneBadgeLabel(
   distanceToSiteM: number,
   geofenceRadiusM: number,
-  accuracyMeters?: number | null,
+  _accuracyMeters?: number | null,
 ): string {
-  const enterRadius = effectiveEnterRadiusM(geofenceRadiusM, accuracyMeters);
-
-  if (distanceToSiteM <= enterRadius) {
+  if (distanceToSiteM <= geofenceRadiusM) {
     // const remainingM = Math.max(0, Math.round(geofenceRadiusM - distanceToSiteM));
     // return `Within range · ${remainingM} m remaining`;
-    return `Within range `;
+    return `You are within range of your assigned work location. `;
   }
 
   // const beyondM = Math.max(0, Math.round(distanceToSiteM - geofenceRadiusM));
   // return `Out of range · ${beyondM} m beyond`;
-  return `Out of range `;
+  return `You are out of range of your assigned work location. `;
 }

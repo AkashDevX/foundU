@@ -48,8 +48,10 @@ import {
   postBreakOut,
   postClockIn,
   postClockOut,
+  activeShiftWorkLocation,
   resolveGeofenceRadiusM,
   resolveGeofenceSiteCoords,
+  workLocationCoords,
   type TimeClockStatus,
 } from '../../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
@@ -59,7 +61,7 @@ import {
   DEFAULT_GEOFENCE_RADIUS_M,
   formatZoneBadgeLabel,
   haversineDistanceM,
-  isInsideGeofence,
+  isOutsideGeofence,
 } from '../../utils/geofence';
 import type { UserProfileSnapshot } from '../../types/userProfile';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
@@ -142,6 +144,13 @@ function clockInFailureAlert(
       variant: 'info',
     };
   }
+  if (code === 'shifts_finished_today') {
+    return {
+      title: 'Shifts finished',
+      message: "You've finished all of today's shifts.",
+      variant: 'info',
+    };
+  }
   if (code === 'outside_geofence') {
     return {
       title: 'Outside work site',
@@ -207,6 +216,11 @@ function shiftPillLabel(
   if (status?.shift_issue === 'no_scheduled_shift_today') {
     return 'No shifts assigned today.';
   }
+  const listed = status?.scheduled_shifts ?? [];
+  const everyShiftFinished = listed.length > 0 && listed.every((shift) => shift.is_finished);
+  if (status && !status.scheduled_shift && (listed.length === 0 || everyShiftFinished)) {
+    return 'No more shifts today.';
+  }
   if (fallbackStart) {
     return `Shift starts at ${fallbackStart}`;
   }
@@ -257,6 +271,18 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   const [clockOutComment, setClockOutComment] = useState('');
   const isOnBreak = timeClockStatus?.is_on_break === true;
   const punchBusy = clockPunching || breakPunching;
+  const shiftRows = timeClockStatus?.scheduled_shifts ?? [];
+  const [chosenShiftId, setChosenShiftId] = useState<number | null>(null);
+  const openShiftRows = shiftRows.filter((shift) => !shift.is_finished);
+  const serverShiftId =
+    openShiftRows.find((shift) => shift.is_current)?.id ?? openShiftRows[0]?.id ?? null;
+  const selectedShiftId =
+    !isClockedIn &&
+    chosenShiftId != null &&
+    openShiftRows.some((shift) => shift.id === chosenShiftId)
+      ? chosenShiftId
+      : serverShiftId;
+  const selectedShift = openShiftRows.find((shift) => shift.id === selectedShiftId) ?? null;
 
   const showClockAlert = useCallback(
     (title: string, message: string, variant: NonNullable<SweetAlertProps['variant']>) => {
@@ -295,17 +321,42 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     [assignmentProfile],
   );
 
+  const activeShiftSite = useMemo(
+    () =>
+      selectedShift?.work_location ??
+      activeShiftWorkLocation(shiftRows) ??
+      timeClockStatus?.work_location ??
+      null,
+    [selectedShift, shiftRows, timeClockStatus?.work_location],
+  );
+
   const geofenceSiteCoords = useMemo(() => {
+    const shiftCoords = workLocationCoords(activeShiftSite);
+    // A same-day shift has its own site. Do not fall back to the employee
+    // profile pin, or a different shift's location can read as "within range".
+    if (shiftRows.length > 0) {
+      return shiftCoords;
+    }
     return resolveGeofenceSiteCoords(
-      assignedCoords,
+      shiftCoords ?? assignedCoords,
       timeClockStatus?.open_session,
     );
-  }, [assignedCoords, timeClockStatus?.open_session]);
+  }, [activeShiftSite, assignedCoords, shiftRows.length, timeClockStatus?.open_session]);
+
+  const zoneRadiusM =
+    activeShiftSite?.geofence_radius_meters ??
+    geofenceRadiusM;
 
   const mapTargetCoords = geofenceSiteCoords ?? userCoords;
 
-  const assignedSiteName = assignmentProfile?.assignedWorkLocationName?.trim() || null;
-  const assignedSiteAddress = assignmentProfile?.assignedWorkLocationAddress?.trim() || null;
+  const assignedSiteName =
+    activeShiftSite?.name?.trim() ||
+    (shiftRows.length === 0 ? assignmentProfile?.assignedWorkLocationName?.trim() : null) ||
+    null;
+  const assignedSiteAddress =
+    activeShiftSite?.address?.trim() ||
+    (shiftRows.length === 0 ? assignmentProfile?.assignedWorkLocationAddress?.trim() : null) ||
+    null;
   const siteLatKey = geofenceSiteCoords ? geofenceSiteCoords.lat.toFixed(6) : null;
   const siteLngKey = geofenceSiteCoords ? geofenceSiteCoords.lng.toFixed(6) : null;
 
@@ -361,23 +412,28 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
   }, [userCoords, geofenceSiteCoords]);
 
   const isInZone = useMemo(() => {
-    if (!userCoords || !geofenceSiteCoords) return null;
-    return isInsideGeofence(
-      { lat: userCoords.lat, lng: userCoords.lng },
-      geofenceSiteCoords,
-      geofenceRadiusM,
-      userCoords.accuracyMeters,
-    );
-  }, [userCoords, geofenceSiteCoords, geofenceRadiusM]);
+    if (!userCoords || !geofenceSiteCoords || distanceToSiteM === null) return null;
+    const user = { lat: userCoords.lat, lng: userCoords.lng };
+    // Within range means inside the radius saved on this shift's work location.
+    if (isClockedIn) {
+      return !isOutsideGeofence(
+        user,
+        geofenceSiteCoords,
+        zoneRadiusM,
+        userCoords.accuracyMeters,
+      );
+    }
+    return distanceToSiteM <= zoneRadiusM;
+  }, [distanceToSiteM, isClockedIn, userCoords, geofenceSiteCoords, zoneRadiusM]);
 
   const zoneBadgeLabel = useMemo(() => {
+    if (isClockedIn) {
+      if (isInZone === null) return null;
+      return isInZone ? 'Within range ' : 'Out of range ';
+    }
     if (distanceToSiteM === null) return null;
-    return formatZoneBadgeLabel(
-      distanceToSiteM,
-      geofenceRadiusM,
-      userCoords?.accuracyMeters,
-    );
-  }, [distanceToSiteM, geofenceRadiusM, userCoords?.accuracyMeters]);
+    return formatZoneBadgeLabel(distanceToSiteM, zoneRadiusM, 0);
+  }, [isClockedIn, isInZone, distanceToSiteM, zoneRadiusM]);
 
   const siteLat = geofenceSiteCoords?.lat ?? null;
   const siteLng = geofenceSiteCoords?.lng ?? null;
@@ -941,7 +997,7 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         accuracy_meters: position.accuracyMeters,
       };
 
-      const clockResult = await postClockIn(coords);
+      const clockResult = await postClockIn(coords, selectedShift?.id ?? null);
       if (!clockResult.ok) {
         const alert = clockInFailureAlert(clockResult.code, clockResult.message);
         showClockAlert(alert.title, alert.message, alert.variant);
@@ -955,6 +1011,9 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         timeClock: clockResult.time_clock,
         message: clockResult.message,
         source: 'manual',
+      });
+      void refreshAndCacheAccountProfileFromApi().then((api) => {
+        if (api.ok) setAssignmentProfile(api.profile);
       });
       showClockAlert('Clocked in', clockResult.message, 'success');
     } catch (err: unknown) {
@@ -1011,6 +1070,9 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
         message: clockResult.message,
         source: 'manual',
       });
+      void refreshAndCacheAccountProfileFromApi().then((api) => {
+        if (api.ok) setAssignmentProfile(api.profile);
+      });
       showClockAlert('Clocked out', clockResult.message, 'success');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not read GPS location.';
@@ -1036,7 +1098,11 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     const onBreak = timeClockStatus?.is_on_break === true;
     const breakWindow = timeClockStatus?.break_window;
     if (!onBreak && breakWindow && !isInsideBreakWindow(breakWindow, Date.now())) {
-      showClockAlert('Meal break unavailable', breakWindow.message, 'warning');
+      showClockAlert(
+        'Meal break unavailable',
+        breakWindow.block_message || breakWindow.message,
+        'warning',
+      );
       return;
     }
 
@@ -1094,6 +1160,123 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
       setBreakPunching(false);
     }
   };
+
+  const resolvedActiveIndex = shiftRows.findIndex((shift) => shift.id === selectedShiftId);
+  const showListedShifts = shiftRows.length > 1 || shiftRows.some((shift) => shift.is_finished);
+
+  const renderShiftPill = (label: string, onGreen: boolean) => (
+    <View style={[styles.shiftPill, onGreen ? styles.shiftPillIn : styles.shiftPillOut]}>
+      <Feather name="clock" size={20} color="#FFFFFF" />
+      <Text style={styles.shiftPillText}>{label}</Text>
+    </View>
+  );
+
+  const renderClockStatusCard = (pill: React.ReactNode, follow: boolean) => (
+    <View
+      style={[
+        styles.clockInCard,
+        isClockedIn ? styles.clockInCardIn : styles.clockInCardOut,
+        follow ? styles.shiftCardFollow : null,
+      ]}
+    >
+      <View
+        style={[
+          styles.clockInGeo,
+          styles.clockInGeo1,
+          isClockedIn ? styles.clockInGeo1In : styles.clockInGeo1Out,
+        ]}
+      />
+      <View
+        style={[
+          styles.clockInGeo,
+          styles.clockInGeo2,
+          isClockedIn ? styles.clockInGeo2In : styles.clockInGeo2Out,
+        ]}
+      />
+      <Text style={styles.statusLabel}>CURRENT STATUS</Text>
+      <View style={styles.statusRow}>
+        <View
+          style={[
+            styles.statusDot,
+            isOnBreak ? styles.statusDotBreak : isClockedIn ? styles.statusDotIn : styles.statusDotOut,
+          ]}
+        />
+        <Text
+          style={[
+            styles.statusText,
+            isOnBreak ? styles.statusTextBreak : isClockedIn ? styles.statusTextIn : styles.statusTextOut,
+          ]}
+        >
+          {isOnBreak ? 'On Break' : isClockedIn ? 'Clocked In' : 'Not Clocked In'}
+        </Text>
+      </View>
+      {isClockedIn && timeClockStatus?.open_session?.clocked_in_at ? (
+        <Text style={styles.clockSinceText}>
+          Since {formatInstantInAppTimezone(timeClockStatus.open_session.clocked_in_at)}
+        </Text>
+      ) : null}
+      {isOnBreak && timeClockStatus?.open_session?.break_started_at ? (
+        <Text style={styles.breakSinceText}>
+          Break since {formatInstantInAppTimezone(timeClockStatus.open_session.break_started_at)}
+        </Text>
+      ) : null}
+      <Pressable
+        style={[
+          styles.clockInBtn,
+          isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut,
+          !isClockedIn ? styles.clockInBtnSolo : null,
+          !workLocationReady ? { opacity: 0.45 } : null,
+        ]}
+        onPress={() => void handleClockPunch()}
+        disabled={punchBusy}
+      >
+        {clockPunching ? (
+          <ActivityIndicator
+            size="large"
+            color={isClockedIn ? '#166534' : '#991B1B'}
+            style={styles.clockInBtnIcon}
+          />
+        ) : (
+          <Feather
+            name={isClockedIn ? 'log-out' : 'log-in'}
+            size={52}
+            color={isClockedIn ? '#166534' : '#991B1B'}
+            style={styles.clockInBtnIcon}
+          />
+        )}
+        <Text style={[styles.clockInBtnText, isClockedIn ? styles.clockInBtnTextIn : styles.clockInBtnTextOut]}>
+          {isClockedIn ? 'Clock Out' : 'Clock In'}
+        </Text>
+      </Pressable>
+      {isClockedIn && !isOnBreak && timeClockStatus?.break_window ? (
+        <Text style={styles.breakHoursText}>
+          Break between {timeClockStatus.break_window.opens_label} and {timeClockStatus.break_window.closes_label}
+        </Text>
+      ) : null}
+      {isClockedIn ? (
+        <Pressable
+          style={[styles.breakBtn, isOnBreak ? styles.breakBtnOut : styles.breakBtnIn]}
+          onPress={() => void handleBreakPunch()}
+          disabled={punchBusy}
+          accessibilityLabel={isOnBreak ? 'Break out' : 'Break in'}
+        >
+          {breakPunching ? (
+            <ActivityIndicator size="small" color={isOnBreak ? '#92400E' : '#1E3A5F'} />
+          ) : (
+            <Feather
+              name={isOnBreak ? 'play' : 'coffee'}
+              size={18}
+              color={isOnBreak ? '#92400E' : '#1E3A5F'}
+            />
+          )}
+          <Text style={[styles.breakBtnText, isOnBreak ? styles.breakBtnTextOut : styles.breakBtnTextIn]}>
+            {isOnBreak ? 'Break Out' : 'Break In'}
+          </Text>
+        </Pressable>
+      ) : null}
+      {pill}
+    </View>
+  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -1167,108 +1350,109 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
           </View>
         ) : null}
 
-        <View style={[styles.clockInCard, isClockedIn ? styles.clockInCardIn : styles.clockInCardOut]}>
-          <View
-            style={[
-              styles.clockInGeo,
-              styles.clockInGeo1,
-              isClockedIn ? styles.clockInGeo1In : styles.clockInGeo1Out,
-            ]}
-          />
-          <View
-            style={[
-              styles.clockInGeo,
-              styles.clockInGeo2,
-              isClockedIn ? styles.clockInGeo2In : styles.clockInGeo2Out,
-            ]}
-          />
-          <Text style={styles.statusLabel}>CURRENT STATUS</Text>
-          <View style={styles.statusRow}>
-            <View
-              style={[
-                styles.statusDot,
-                isOnBreak ? styles.statusDotBreak : isClockedIn ? styles.statusDotIn : styles.statusDotOut,
-              ]}
-            />
-            <Text
-              style={[
-                styles.statusText,
-                isOnBreak ? styles.statusTextBreak : isClockedIn ? styles.statusTextIn : styles.statusTextOut,
-              ]}
-            >
-              {isOnBreak ? 'On Break' : isClockedIn ? 'Clocked In' : 'Not Clocked In'}
-            </Text>
-          </View>
-          {isClockedIn && timeClockStatus?.open_session?.clocked_in_at ? (
-            <Text style={styles.clockSinceText}>
-              Since {formatInstantInAppTimezone(timeClockStatus.open_session.clocked_in_at)}
-            </Text>
-          ) : null}
-          {isOnBreak && timeClockStatus?.open_session?.break_started_at ? (
-            <Text style={styles.breakSinceText}>
-              Break since {formatInstantInAppTimezone(timeClockStatus.open_session.break_started_at)}
-            </Text>
-          ) : null}
-          <Pressable
-            style={[
-              styles.clockInBtn,
-              isClockedIn ? styles.clockInBtnIn : styles.clockInBtnOut,
-              !isClockedIn ? styles.clockInBtnSolo : null,
-              !workLocationReady ? { opacity: 0.45 } : null,
-            ]}
-            onPress={() => void handleClockPunch()}
-            disabled={punchBusy}
-          >
-            {clockPunching ? (
-              <ActivityIndicator
-                size="large"
-                color={isClockedIn ? '#166534' : '#991B1B'}
-                style={styles.clockInBtnIcon}
-              />
-            ) : (
-              <Feather
-                name={isClockedIn ? 'log-out' : 'log-in'}
-                size={52}
-                color={isClockedIn ? '#166534' : '#991B1B'}
-                style={styles.clockInBtnIcon}
-              />
-            )}
-            <Text style={[styles.clockInBtnText, isClockedIn ? styles.clockInBtnTextIn : styles.clockInBtnTextOut]}>
-              {isClockedIn ? 'Clock Out' : 'Clock In'}
-            </Text>
-          </Pressable>
-          {isClockedIn ? (
-            <Pressable
-              style={[styles.breakBtn, isOnBreak ? styles.breakBtnOut : styles.breakBtnIn]}
-              onPress={() => void handleBreakPunch()}
-              disabled={punchBusy}
-              accessibilityLabel={isOnBreak ? 'Break out' : 'Break in'}
-            >
-              {breakPunching ? (
-                <ActivityIndicator size="small" color={isOnBreak ? '#92400E' : '#1E3A5F'} />
-              ) : (
-                <Feather
-                  name={isOnBreak ? 'play' : 'coffee'}
-                  size={18}
-                  color={isOnBreak ? '#92400E' : '#1E3A5F'}
-                />
-              )}
-              <Text style={[styles.breakBtnText, isOnBreak ? styles.breakBtnTextOut : styles.breakBtnTextIn]}>
-                {isOnBreak ? 'Break Out' : 'Break In'}
-              </Text>
-            </Pressable>
-          ) : null}
-          <View style={[styles.shiftPill, isClockedIn ? styles.shiftPillIn : styles.shiftPillOut]}>
-            <Feather name="clock" size={20} color="#FFFFFF" />
-            <Text style={styles.shiftPillText}>
-              {shiftPillLabel(
-                isClockedIn,
-                timeClockStatus,
-                assignmentProfile?.assignedShiftStartTime,
-              )}
-            </Text>
-          </View>
-        </View>
+        {showListedShifts ? (
+          <>
+            {shiftRows.map((shift, index) => {
+              const key = shift.id ?? `${shift.start_time}-${shift.end_time}`;
+              const range =
+                shift.start_label && shift.end_label
+                  ? `${shift.start_label} – ${shift.end_label}`
+                  : shift.start_label;
+              if (shift.is_finished) {
+                return (
+                  <View
+                    key={key}
+                    style={[
+                      styles.clockInCard,
+                      styles.clockInCardOut,
+                      index > 0 ? styles.shiftCardFollow : null,
+                    ]}
+                  >
+                    <View style={[styles.clockInGeo, styles.clockInGeo1, styles.clockInGeo1Out]} />
+                    <View style={[styles.clockInGeo, styles.clockInGeo2, styles.clockInGeo2Out]} />
+                    <Feather name="check-circle" size={22} color="#FFFFFF" style={styles.extraShiftIcon} />
+                    <Text style={styles.statusLabel}>CLOCKED OUT</Text>
+                    <Text style={styles.extraShiftTime}>{range}</Text>
+                  </View>
+                );
+              }
+              const label =
+                isClockedIn && shift.is_current && shift.end_label
+                  ? `Shift ends at ${shift.end_label}`
+                  : `Shift starts at ${shift.start_label}`;
+              if (shift.id != null && shift.id === selectedShiftId) {
+                return (
+                  <React.Fragment key={key}>
+                    {renderClockStatusCard(
+                      renderShiftPill(label, isClockedIn && shift.is_current),
+                      index > 0,
+                    )}
+                  </React.Fragment>
+                );
+              }
+              return (
+                <View
+                  key={key}
+                  style={[
+                    styles.clockInCard,
+                    styles.clockInCardOut,
+                    index > 0 ? styles.shiftCardFollow : null,
+                  ]}
+                >
+                  <View style={[styles.clockInGeo, styles.clockInGeo1, styles.clockInGeo1Out]} />
+                  <View style={[styles.clockInGeo, styles.clockInGeo2, styles.clockInGeo2Out]} />
+                  <Feather name="clock" size={22} color="#FFFFFF" style={styles.extraShiftIcon} />
+                  <Text style={styles.statusLabel}>
+                    {resolvedActiveIndex >= 0 && index < resolvedActiveIndex ? 'EARLIER SHIFT' : 'LATER SHIFT'}
+                  </Text>
+                  <Text style={styles.extraShiftTime}>{range}</Text>
+                  {!isClockedIn && shift.id != null ? (
+                    <Pressable
+                      style={styles.useShiftBtn}
+                      onPress={() => setChosenShiftId(shift.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Use the ${range} shift`}
+                    >
+                      <Text style={styles.useShiftBtnText}>Use this shift</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })}
+            {selectedShift == null
+              ? renderClockStatusCard(
+                  renderShiftPill(
+                    shiftPillLabel(
+                      isClockedIn,
+                      timeClockStatus,
+                      assignmentProfile?.assignedShiftStartTime,
+                    ),
+                    isClockedIn,
+                  ),
+                  true,
+                )
+              : null}
+          </>
+        ) : (
+          renderClockStatusCard(
+              shiftRows.length === 1
+                ? renderShiftPill(
+                    isClockedIn && shiftRows[0].is_current && shiftRows[0].end_label
+                      ? `Shift ends at ${shiftRows[0].end_label}`
+                      : `Shift starts at ${shiftRows[0].start_label}`,
+                    isClockedIn && shiftRows[0].is_current,
+                  )
+                : renderShiftPill(
+                    shiftPillLabel(
+                      isClockedIn,
+                      timeClockStatus,
+                      assignmentProfile?.assignedShiftStartTime,
+                    ),
+                    isClockedIn,
+                  ),
+              false,
+            )
+        )}
 
         <View style={styles.locationCard}>
           <View style={styles.locationCardHeaderRow}>

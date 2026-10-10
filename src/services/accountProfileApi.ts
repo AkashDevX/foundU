@@ -275,6 +275,30 @@ function parseWeeklyAvailabilityJson(
   return parseStoredWeeklyAvailability(v);
 }
 
+function parseDocumentRenewals(value: unknown): UserProfileSnapshot['documentRenewals'] {
+  if (!Array.isArray(value)) return undefined;
+  const items: NonNullable<UserProfileSnapshot['documentRenewals']> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const key = pickString(row, 'key');
+    const label = pickString(row, 'label');
+    const expiry = pickString(row, 'expiry');
+    const daysRaw = row.days_until ?? row.daysUntil;
+    const days = typeof daysRaw === 'number' ? daysRaw : Number(daysRaw);
+    const status = pickString(row, 'status');
+    if (!key || !label || !expiry || !Number.isFinite(days)) continue;
+    items.push({
+      key,
+      label,
+      expiry,
+      daysUntil: days,
+      status: status === 'expired' ? 'expired' : 'expiring',
+    });
+  }
+  return items;
+}
+
 function extractRow(parsed: unknown): Record<string, unknown> | null {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const o = parsed as Record<string, unknown>;
@@ -487,6 +511,10 @@ export function mapMePayloadToUserProfile(
     modeOfTransport: pickString(row, 'mode_of_transport', 'modeOfTransport'),
     vehicleRegistration: pickString(row, 'vehicle_registration', 'vehicleRegistration'),
     vehicleExpiry: pickString(row, 'vehicle_expiry', 'vehicleExpiry'),
+    documentRenewals:
+      Array.isArray(row.document_renewals) || Array.isArray(row.documentRenewals)
+        ? (parseDocumentRenewals(row.document_renewals ?? row.documentRenewals) ?? [])
+        : undefined,
     vehicleInsuranceUploaded: asYesNoUploaded(
       row.vehicle_insurance_uploaded ?? row.vehicleInsuranceUploaded,
     ),

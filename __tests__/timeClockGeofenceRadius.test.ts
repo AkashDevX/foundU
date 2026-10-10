@@ -1,8 +1,11 @@
 import { DEFAULT_GEOFENCE_RADIUS_M } from '../src/utils/geofence';
 import {
+  activeShiftWorkLocation,
   mapTimeClockStatus,
   resolveGeofenceRadiusM,
   resolveGeofenceSiteCoords,
+  workLocationCoords,
+  type ScheduledShiftRow,
   type TimeClockStatus,
 } from '../src/utils/timeClockStatus';
 
@@ -98,5 +101,44 @@ describe('geofence site coords', () => {
   it('returns null when neither assigned nor session coords exist', () => {
     expect(resolveGeofenceSiteCoords(null, null)).toBeNull();
     expect(resolveGeofenceSiteCoords(undefined, undefined)).toBeNull();
+  });
+});
+
+function shiftRow(
+  id: number,
+  isCurrent: boolean,
+  latitude: number,
+  radius: number,
+): ScheduledShiftRow {
+  return {
+    id,
+    start_time: '09:00',
+    end_time: '17:00',
+    start_label: '9:00 AM',
+    end_label: '5:00 PM',
+    within_window: false,
+    is_current: isCurrent,
+    is_finished: false,
+    work_location_name: `Site ${id}`,
+    work_location: {
+      id,
+      name: `Site ${id}`,
+      address: null,
+      latitude,
+      longitude: 153,
+      geofence_radius_meters: radius,
+    },
+  };
+}
+
+describe('active shift site', () => {
+  it('uses the current shift site when another shift is closer to the phone', () => {
+    const current = shiftRow(2, true, -27.5, 50);
+    const other = shiftRow(1, false, -27.47, 300);
+    const site = activeShiftWorkLocation([other, current]);
+
+    expect(site?.id).toBe(2);
+    expect(workLocationCoords(site)).toEqual({ lat: -27.5, lng: 153 });
+    expect(site?.geofence_radius_meters).toBe(50);
   });
 });

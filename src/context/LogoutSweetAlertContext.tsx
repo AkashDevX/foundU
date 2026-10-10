@@ -4,6 +4,7 @@ import { SweetAlert } from '../components/SweetAlert';
 import { setAuthToken, setLastCompanySlug, setSessionAuthenticated } from '../services/authSessionStorage';
 import { clearAccountProfile } from '../services/accountProfileStorage';
 import { navigationRef, stopChatPush } from '../services/chatPush';
+import { cancelDocumentRenewalReminders } from '../services/documentRenewalNative';
 
 type LogoutSweetAlertContextValue = {
   openLogoutSweetAlert: () => void;
@@ -36,7 +37,10 @@ export function LogoutSweetAlertProvider({ children }: { children: React.ReactNo
     setVisible(false);
 
     // Unregister while the auth token is still present, but never block logout.
-    await withTimeout(stopChatPush(), PUSH_CLEANUP_BUDGET_MS);
+    await withTimeout(
+      Promise.all([stopChatPush(), cancelDocumentRenewalReminders()]),
+      PUSH_CLEANUP_BUDGET_MS,
+    );
 
     await Promise.all([
       setSessionAuthenticated(false),

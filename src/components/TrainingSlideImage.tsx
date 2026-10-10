@@ -35,20 +35,19 @@ export function TrainingSlideImage({ url }: Props) {
     }
   };
 
-  if (failed) return null;
-
   return (
-    <View style={styles.frame}>
+    <View style={styles.frame} collapsable={false}>
       {uri ? (
         <Image
           source={{ uri }}
           resizeMode="contain"
+          fadeDuration={0}
           onLoad={onLoad}
           style={[styles.image, { aspectRatio: aspect }]}
         />
       ) : (
         <View style={styles.loading}>
-          <ActivityIndicator color={colors.primary} />
+          {failed ? null : <ActivityIndicator color={colors.primary} />}
         </View>
       )}
     </View>
@@ -60,11 +59,11 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 16,
     borderRadius: 14,
-    overflow: 'hidden',
     backgroundColor: '#E8EEF5',
   },
   image: {
     width: '100%',
+    backgroundColor: '#E8EEF5',
   },
   loading: {
     height: 180,

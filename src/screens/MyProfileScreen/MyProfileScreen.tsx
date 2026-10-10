@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,9 @@ import type { UserProfileSnapshot } from '../../types/userProfile';
 import { colors, spacing } from '../../theme/theme';
 import { FullScreenLoader } from '../../components/FullScreenLoader';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
+import { DocumentRenewalSection } from '../../components/DocumentRenewalSection';
+import { syncDocumentRenewalReminders } from '../../services/documentRenewalNative';
+import { renewalsForProfile } from '../../utils/documentRenewal';
 
 function display(v: string | undefined | null): string {
   if (v == null || String(v).trim() === '') return '—';
@@ -115,6 +118,11 @@ export function MyProfileScreen() {
     }, [refresh]),
   );
 
+  useEffect(() => {
+    if (!profile || !sessionAuthenticated) return;
+    void syncDocumentRenewalReminders(renewalsForProfile(profile));
+  }, [profile, sessionAuthenticated]);
+
   return (
     <View style={[{ flex: 1, backgroundColor: '#E8ECF1' }, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -165,6 +173,7 @@ export function MyProfileScreen() {
               </Text>
             </View>
           ) : null}
+          <DocumentRenewalSection items={renewalsForProfile(profile)} onUpdated={refresh} />
           <View style={mp.heroCard}>
             <View style={mp.heroAvatarOuter}>
               <View style={mp.heroAvatar}>

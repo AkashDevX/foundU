@@ -20,7 +20,16 @@ export function parseApiJson(text: string): unknown {
     body = body.slice(jsonStart);
   }
 
-  return JSON.parse(body);
+  try {
+    return JSON.parse(body);
+  } catch (first) {
+    const open = body.indexOf('{');
+    const close = body.lastIndexOf('}');
+    if (open >= 0 && close > open) {
+      return JSON.parse(body.slice(open, close + 1));
+    }
+    throw first;
+  }
 }
 
 export function tryParseApiJson(text: string): unknown | null {

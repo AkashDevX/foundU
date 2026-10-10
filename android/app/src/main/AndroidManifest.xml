@@ -29,6 +29,18 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/mp4" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/webm" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/quicktime" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="application/octet-stream" />
         </intent>
         <intent>
@@ -59,6 +71,22 @@
         android:name=".location.LocationMonitorService"
         android:exported="false"
         android:foregroundServiceType="location" />
+      <receiver
+        android:name=".documents.DocumentRenewalReceiver"
+        android:exported="true"
+        android:enabled="true">
+        <intent-filter>
+          <action android:name="com.blugreenfac.crulynk.documents.FIRE_RENEWAL" />
+        </intent-filter>
+        <intent-filter>
+          <action android:name="android.intent.action.BOOT_COMPLETED" />
+          <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+          <action android:name="android.intent.action.TIME_SET" />
+          <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+          <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+        </intent-filter>
+      </receiver>
       <receiver
         android:name=".shift.ShiftReminderReceiver"
         android:exported="true"

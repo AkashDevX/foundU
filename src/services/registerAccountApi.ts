@@ -213,7 +213,7 @@ function postRegistrationWithProgress(
       );
     };
 
-    xhr.send(body as XMLHttpRequestBodyInit);
+    xhr.send(body);
   });
 }
 

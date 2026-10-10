@@ -74,7 +74,7 @@ async function getJson<T>(
     });
     const raw = await res.text();
     const parsed = tryParseApiJson(raw);
-    if (!res.ok) {
+    if (!res.ok || parsed == null || typeof parsed !== 'object') {
       return { ok: false, message: errorMessage(parsed, fallback) };
     }
     return { ok: true, data: parsed as T };
@@ -103,7 +103,7 @@ async function postJson<T>(
     );
     const raw = await res.text();
     const parsed = tryParseApiJson(raw);
-    if (!res.ok) {
+    if (!res.ok || parsed == null || typeof parsed !== 'object') {
       return { ok: false, message: errorMessage(parsed, fallback) };
     }
     return { ok: true, data: parsed as T };
