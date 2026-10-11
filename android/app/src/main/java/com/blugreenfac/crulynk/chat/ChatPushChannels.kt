@@ -12,7 +12,13 @@ object ChatPushChannels {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = context.getSystemService(NotificationManager::class.java) ?: return
     val existing = manager.getNotificationChannel(CHANNEL_ID)
-    if (existing != null) return
+    if (existing != null) {
+      existing.lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+      existing.enableVibration(true)
+      existing.setShowBadge(true)
+      manager.createNotificationChannel(existing)
+      return
+    }
 
     val channel = NotificationChannel(
       CHANNEL_ID,
@@ -21,6 +27,9 @@ object ChatPushChannels {
     ).apply {
       description = "New messages in CruLynk chat"
       enableVibration(true)
+      enableLights(true)
+      setShowBadge(true)
+      lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
     }
     manager.createNotificationChannel(channel)
   }

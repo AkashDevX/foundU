@@ -1,4 +1,5 @@
 import { DEFAULT_GEOFENCE_RADIUS_M } from './geofence';
+import { parseTradingHours, type TradingHoursByDay } from './tradingHours';
 
 export type ScheduledShiftTimes = {
   start_time: string;
@@ -11,6 +12,9 @@ export type ShiftWorkLocation = {
   id: number | null;
   name: string | null;
   address: string | null;
+  notes: string | null;
+  trading_hours: TradingHoursByDay | null;
+  site_information: string | null;
   latitude: number | null;
   longitude: number | null;
   geofence_radius_meters: number | null;
@@ -295,10 +299,19 @@ function mapWorkLocation(raw: unknown): ShiftWorkLocation | null {
   const longitude = coerceFiniteNumber(o.longitude);
   if (name === '' && address === '' && latitude == null && longitude == null) return null;
   const id = coerceFiniteNumber(o.id);
+  const text = (key: string): string | null => {
+    const value = o[key];
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed !== '' ? trimmed : null;
+  };
   return {
     id: id != null ? id : null,
     name: name !== '' ? name : null,
     address: address !== '' ? address : null,
+    notes: text('notes'),
+    trading_hours: parseTradingHours(o.trading_hours),
+    site_information: text('site_information'),
     latitude,
     longitude,
     geofence_radius_meters: coercePositiveMeters(o.geofence_radius_meters),

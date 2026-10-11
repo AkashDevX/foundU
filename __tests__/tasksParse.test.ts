@@ -29,7 +29,45 @@ describe('tasksParse', () => {
 
     expect(result.payload.tasks).toHaveLength(1);
     expect(result.payload.tasks[0]?.title).toBe('Cover break at register 3');
+    expect(result.payload.tasks[0]?.priority).toBe('medium');
     expect(result.payload.tasks[0]?.id).toBe('employee-20');
+    expect(result.payload.tasks[0]?.beforePhotos).toEqual([]);
+    expect(result.payload.tasks[0]?.signature).toBeNull();
+  });
+
+  it('uses the urgency sent by the server', () => {
+    const result = parseTasksPayload({
+      tasks: [{ ...assignment, priority: 'high' }],
+      counts: { total: 1, completed: 0, pending: 1 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.payload.tasks[0]?.priority).toBe('high');
+  });
+
+  it('keeps before photos, after photos, and the signature', () => {
+    const result = parseTasksPayload({
+      tasks: [
+        {
+          ...assignment,
+          before_photos: [{ index: 0, name: 'before.jpg' }],
+          after_photos: [{ index: 0, name: 'after.jpg' }],
+          signature: {
+            width: 320,
+            height: 160,
+            strokes: [[{ x: 10, y: 20 }, { x: 30, y: 40 }]],
+          },
+        },
+      ],
+      counts: { total: 1, completed: 0, pending: 1 },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.payload.tasks[0]?.beforePhotos).toEqual([{ index: 0, name: 'before.jpg' }]);
+    expect(result.payload.tasks[0]?.afterPhotos).toEqual([{ index: 0, name: 'after.jpg' }]);
+    expect(result.payload.tasks[0]?.signature?.strokes).toHaveLength(1);
   });
 
   it('parses legacy double-nested tasks wrapper', () => {

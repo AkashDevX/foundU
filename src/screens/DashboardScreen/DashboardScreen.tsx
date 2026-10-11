@@ -56,7 +56,8 @@ import {
 } from '../../services/timeClockApi';
 import { notifyTimeClockChange, subscribeTimeClockChange } from '../../services/timeClockEvents';
 import { isInsideBreakWindow } from '../../utils/breakWindow';
-import { formatInstantInAppTimezone } from '../../utils/formatDateTime';
+import { formatInstantInAppTimezone, todayIsoInAppTimezone } from '../../utils/formatDateTime';
+import { tradingHoursOnDate } from '../../utils/tradingHours';
 import {
   DEFAULT_GEOFENCE_RADIUS_M,
   formatZoneBadgeLabel,
@@ -357,6 +358,30 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
     activeShiftSite?.address?.trim() ||
     (shiftRows.length === 0 ? assignmentProfile?.assignedWorkLocationAddress?.trim() : null) ||
     null;
+  const siteDetail = (
+    fromShift: string | null | undefined,
+    fromProfile: string | null | undefined,
+  ): string | null => {
+    const shiftValue = fromShift?.trim();
+    if (shiftValue) return shiftValue;
+    if (shiftRows.length > 0) return null;
+    const profileValue = fromProfile?.trim();
+    return profileValue || null;
+  };
+  const siteInformation = siteDetail(
+    activeShiftSite?.site_information,
+    assignmentProfile?.assignedWorkLocationSiteInformation,
+  );
+  const siteNotes = siteDetail(
+    activeShiftSite?.notes,
+    assignmentProfile?.assignedWorkLocationNotes,
+  );
+  const todayTrading = tradingHoursOnDate(
+    shiftRows.length > 0
+      ? activeShiftSite?.trading_hours
+      : activeShiftSite?.trading_hours ?? assignmentProfile?.assignedWorkLocationTradingHours,
+    todayIsoInAppTimezone(),
+  );
   const siteLatKey = geofenceSiteCoords ? geofenceSiteCoords.lat.toFixed(6) : null;
   const siteLngKey = geofenceSiteCoords ? geofenceSiteCoords.lng.toFixed(6) : null;
 
@@ -1512,6 +1537,25 @@ export function DashboardScreen({ isTabActive = true }: { isTabActive?: boolean 
               ) : null}
               {mapTargetAddress ? (
                 <Text style={styles.locationAddress}>{mapTargetAddress}</Text>
+              ) : null}
+              {hasAssignedSite && todayTrading ? (
+                <View style={styles.locationDetailBlock}>
+                  <Text style={styles.locationDetailLabel}>Trading hours</Text>
+                  <Text style={styles.locationDetailBody}>{todayTrading.dateLabel}</Text>
+                  <Text style={styles.locationDetailBody}>{todayTrading.hoursLabel}</Text>
+                </View>
+              ) : null}
+              {hasAssignedSite && siteInformation ? (
+                <View style={styles.locationDetailBlock}>
+                  <Text style={styles.locationDetailLabel}>Relevant site information</Text>
+                  <Text style={styles.locationDetailBody}>{siteInformation}</Text>
+                </View>
+              ) : null}
+              {hasAssignedSite && siteNotes ? (
+                <View style={styles.locationDetailBlock}>
+                  <Text style={styles.locationDetailLabel}>Instructions</Text>
+                  <Text style={styles.locationDetailBody}>{siteNotes}</Text>
+                </View>
               ) : null}
               {mapTargetCoords ? (
                 <View style={styles.locationCoordsRow}>

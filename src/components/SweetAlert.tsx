@@ -14,7 +14,7 @@ import { colors, fontFamily } from '../theme/theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
-type SweetAlertVariant = 'success' | 'error' | 'info' | 'warning' | 'danger';
+type SweetAlertVariant = 'success' | 'error' | 'info' | 'warning' | 'danger' | 'task';
 
 const VARIANT = {
   success: {
@@ -46,6 +46,12 @@ const VARIANT = {
     iconColor: '#D97706',
     confirmBg: '#EA580C',
     icon: 'alert-circle' as const,
+  },
+  task: {
+    iconWrap: '#E8F1FB',
+    iconColor: colors.primary,
+    confirmBg: colors.accent,
+    icon: 'check-square' as const,
   },
 };
 

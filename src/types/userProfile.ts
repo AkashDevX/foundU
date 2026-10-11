@@ -1,3 +1,5 @@
+import type { TradingHoursByDay } from '../utils/tradingHours';
+
 /** One availability window on a weekday, stored as 24-hour `HH:mm`. An earlier end time means overnight. */
 export type AvailabilityPeriodJson = {
   start: string;
@@ -52,6 +54,10 @@ export type UserProfileSnapshot = {
   assignedShiftNotes?: string;
   /** Site / location notes from tenant `work_locations.notes`. */
   assignedWorkLocationNotes?: string | null;
+  /** Per-day trading hours from tenant `work_locations.trading_hours`. */
+  assignedWorkLocationTradingHours?: TradingHoursByDay | null;
+  /** Relevant site information from tenant `work_locations.site_information`. */
+  assignedWorkLocationSiteInformation?: string | null;
   /** Administrator notes on the employee assignment (`employees.assignment_notes`). */
   assignmentNotes?: string;
   /** Tenant employee row — useful for status badges. */

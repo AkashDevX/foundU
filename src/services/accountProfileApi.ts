@@ -3,6 +3,7 @@ import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import type { UserProfileSnapshot } from '../types/userProfile';
 import { parseStoredWeeklyAvailability } from '../utils/employeeAvailability';
+import { parseTradingHours } from '../utils/tradingHours';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile, saveAccountProfile } from './accountProfileStorage';
 import { notifyAssignmentChange } from './assignmentEvents';
@@ -460,6 +461,14 @@ export function mapMePayloadToUserProfile(
     assignedWorkLocationNotes:
       pickString(row, 'assigned_work_location_notes', 'work_location_notes') ??
       pickString(assignmentLocation ?? {}, 'notes'),
+    assignedWorkLocationTradingHours: parseTradingHours(
+      row.assigned_work_location_trading_hours ??
+        row.work_location_trading_hours ??
+        assignmentLocation?.trading_hours,
+    ),
+    assignedWorkLocationSiteInformation:
+      pickString(row, 'assigned_work_location_site_information', 'work_location_site_information') ??
+      pickString(assignmentLocation ?? {}, 'site_information'),
     assignmentNotes:
       pickString(row, 'assignment_notes', 'assigned_assignment_notes') ?? pickString(assignment ?? {}, 'notes'),
     employmentStatus: pickString(row, 'employment_status', 'employmentStatus'),
@@ -621,6 +630,8 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
         assignedWorkLocationLat: _oldLocLat,
         assignedWorkLocationLng: _oldLocLng,
         assignedWorkLocationNotes: _oldLocNotes,
+        assignedWorkLocationTradingHours: _oldLocHours,
+        assignedWorkLocationSiteInformation: _oldLocSiteInfo,
         ...existingWithoutLocation
       } = existing;
 
@@ -640,6 +651,8 @@ export async function refreshAndCacheAccountProfileFromApi(): Promise<FetchAccou
         assignedWorkLocationLat: result.profile.assignedWorkLocationLat ?? null,
         assignedWorkLocationLng: result.profile.assignedWorkLocationLng ?? null,
         assignedWorkLocationNotes: result.profile.assignedWorkLocationNotes ?? null,
+        assignedWorkLocationTradingHours: result.profile.assignedWorkLocationTradingHours ?? null,
+        assignedWorkLocationSiteInformation: result.profile.assignedWorkLocationSiteInformation ?? null,
       };
       const { password: _p, password_confirmation: _c, ...safe } = merged;
       await saveAccountProfile(safe);

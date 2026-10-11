@@ -1,10 +1,20 @@
 import { API_BASE_URL } from '../config/api';
 import { addIsoDays, mondayOfWeekIso } from '../utils/formatDateTime';
+import { parseTradingHours, type TradingHoursByDay } from '../utils/tradingHours';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import { getAuthToken, getLastCompanySlug } from './authSessionStorage';
 import { loadAccountProfile } from './accountProfileStorage';
 
 export type ScheduleEntryType = 'shift' | 'time_off' | 'suggestion';
+
+export type ScheduleWorkLocation = {
+  id: number | null;
+  name: string | null;
+  address: string | null;
+  notes: string | null;
+  trading_hours: TradingHoursByDay | null;
+  site_information: string | null;
+};
 
 export type ScheduleDayEntry = {
   id: number | null;
@@ -18,6 +28,7 @@ export type ScheduleDayEntry = {
   notes: string | null;
   start_time: string | null;
   end_time: string | null;
+  work_location: ScheduleWorkLocation | null;
 };
 
 export type ScheduleDay = {
@@ -66,6 +77,32 @@ function formatApiError(parsed: unknown, raw: string, status: number): string {
   return `Could not load schedule (${status}).`;
 }
 
+function scheduleText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed !== '' ? trimmed : null;
+}
+
+function mapScheduleWorkLocation(raw: unknown): ScheduleWorkLocation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = typeof o.id === 'number' ? o.id : null;
+  const name = scheduleText(o.name);
+  const address = scheduleText(o.address);
+  const notes = scheduleText(o.notes);
+  const tradingHours = parseTradingHours(o.trading_hours);
+  const siteInformation = scheduleText(o.site_information);
+  if (id == null && !name && !address && !notes && !tradingHours && !siteInformation) return null;
+  return {
+    id,
+    name,
+    address,
+    notes,
+    trading_hours: tradingHours,
+    site_information: siteInformation,
+  };
+}
+
 function extractSchedule(parsed: unknown): WeeklySchedulePayload | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const root = parsed as Record<string, unknown>;
@@ -98,6 +135,7 @@ function extractSchedule(parsed: unknown): WeeklySchedulePayload | null {
               notes: typeof e.notes === 'string' ? e.notes : null,
               start_time: typeof e.start_time === 'string' ? e.start_time : null,
               end_time: typeof e.end_time === 'string' ? e.end_time : null,
+              work_location: mapScheduleWorkLocation(e.work_location),
             }))
         : [],
     }));

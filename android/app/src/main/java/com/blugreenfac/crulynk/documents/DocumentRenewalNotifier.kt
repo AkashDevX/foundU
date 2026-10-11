@@ -14,7 +14,7 @@ import com.blugreenfac.crulynk.MainActivity
 import com.blugreenfac.crulynk.R
 
 internal object DocumentRenewalNotifier {
-  const val CHANNEL_ID = "com.blugreenfac.crulynk.document_renewals"
+  const val CHANNEL_ID = "com.blugreenfac.crulynk.document_renewals_v2"
   const val NOTIFICATION_ID = 2400
   const val EXTRA_OPEN = "open_document_renewal"
 
@@ -39,15 +39,20 @@ internal object DocumentRenewalNotifier {
   fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    manager.deleteNotificationChannel("com.blugreenfac.crulynk.document_renewals")
     val channel = NotificationChannel(
       CHANNEL_ID,
       "Document renewals",
       NotificationManager.IMPORTANCE_HIGH,
     ).apply {
-      description = "Daily reminders until you upload a renewed document and set the new expiry"
+      description = "CruLynk reminders until you upload a renewed document and set the new expiry"
       enableVibration(true)
+      vibrationPattern = longArrayOf(0, 300, 150, 300)
+      enableLights(true)
+      lightColor = ContextCompat.getColor(context, R.color.crulynk_navy)
       setShowBadge(true)
       lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+      setBypassDnd(true)
     }
     manager.createNotificationChannel(channel)
   }
@@ -65,17 +70,30 @@ internal object DocumentRenewalNotifier {
       },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
+    val appName = context.getString(R.string.app_name)
     val largeIcon = BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+    val brandColor = ContextCompat.getColor(context, R.color.crulynk_navy)
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_shift_reminder)
       .setLargeIcon(largeIcon)
       .setContentTitle(title)
       .setContentText(body)
-      .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-      .setSubText(context.getString(R.string.app_name))
-      .setColor(ContextCompat.getColor(context, R.color.crulynk_navy))
-      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setSubText(appName)
+      .setStyle(
+        NotificationCompat.BigTextStyle()
+          .setBigContentTitle(title)
+          .bigText(body)
+          .setSummaryText(appName),
+      )
+      .setColor(brandColor)
+      .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_REMINDER)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setDefaults(Notification.DEFAULT_ALL)
+      .setVibrate(longArrayOf(0, 300, 150, 300))
+      .setTicker("$appName: $title")
+      .setWhen(System.currentTimeMillis())
+      .setShowWhen(true)
       .setAutoCancel(true)
       .setOnlyAlertOnce(false)
       .setContentIntent(openApp)

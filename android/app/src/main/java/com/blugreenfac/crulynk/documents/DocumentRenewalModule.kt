@@ -29,6 +29,18 @@ class DocumentRenewalModule(private val context: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun showNow(title: String, body: String, promise: Promise) {
+    try {
+      if (title.isNotBlank() && body.isNotBlank()) {
+        DocumentRenewalNotifier.post(context, title, body)
+      }
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("DOCUMENT_RENEWAL_SHOW_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun syncReminder(documentsJson: String, promise: Promise) {
     try {
       DocumentRenewalScheduler.sync(context, documentsJson)

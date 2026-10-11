@@ -9,6 +9,7 @@ import {
   RefreshControl,
   StyleSheet,
   LayoutAnimation,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -22,6 +23,9 @@ import { useHeaderProfileSnapshot } from '../../hooks/useHeaderProfileSnapshot';
 import { ProfilePhotoAvatar } from '../../components/ProfilePhotoAvatar';
 import { floatingTabBarClearance } from '../../navigation/floatingTabBarMetrics';
 import { fetchAssignedTasks, updateTaskCompletion } from '../../services/tasksApi';
+import { TASK_ASSIGNED_EVENT, TASKS_PENDING_EVENT } from '../../services/chatPush';
+import { SignaturePreview } from '../../components/SignaturePad';
+import { TaskEvidenceSheet, TaskPhotoStrip } from './TaskCompletionSheet';
 import { calendarDayKeyInAppTimezone, todayIsoInAppTimezone } from '../../utils/formatDateTime';
 import type { EmployeeTask, TaskPriority } from '../../types/tasks';
 import { SweetAlert } from '../../components/SweetAlert';
@@ -111,6 +115,8 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState<{ task: EmployeeTask; mode: 'start' | 'finish' } | null>(null);
+  const [reopenTask, setReopenTask] = useState<EmployeeTask | null>(null);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
   const loadedOnceRef = useRef(false);
   const tasksRef = useRef<EmployeeTask[]>([]);
@@ -148,6 +154,13 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
     void loadTasks({ silent: loadedOnceRef.current });
   }, [isTabActive, loadTasks]);
 
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(TASK_ASSIGNED_EVENT, () => {
+      void loadTasks({ silent: true });
+    });
+    return () => sub.remove();
+  }, [loadTasks]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadTasks({ silent: true });
@@ -161,6 +174,11 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
   }, [tasks, filter]);
 
   const pendingCount = useMemo(() => tasks.filter((t) => !t.completed).length, [tasks]);
+
+  useEffect(() => {
+    if (!loadedOnceRef.current) return;
+    DeviceEventEmitter.emit(TASKS_PENDING_EVENT, pendingCount);
+  }, [pendingCount, tasks]);
   const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
   const dueTodayCount = useMemo(() => tasks.filter((t) => isDueToday(t)).length, [tasks]);
   const progressPct = useMemo(() => {
@@ -304,7 +322,7 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
 
         {hasAssignedTasks ? (
           <Text style={styles.sectionSubtitle}>
-            Worksite actions from your supervisor. Tap a task when you have completed it.
+            Worksite actions from your supervisor. Start with before photos, then finish with after photos and your signature.
           </Text>
         ) : null}
 
@@ -403,14 +421,9 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
           const busy = togglingId === task.id;
 
           return (
-            <TouchableOpacity
+            <View
               key={task.id}
               style={[local.taskCard, task.completed && local.taskCardDone]}
-              activeOpacity={0.92}
-              onPress={() => void toggleTask(task)}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel={`${task.title}. ${task.completed ? 'Completed' : 'Not completed'}. Tap to toggle.`}
             >
               <View style={[local.priorityStripe, { backgroundColor: theme.bar }]} />
 
@@ -455,9 +468,16 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
                 </View>
 
                 {task.description.trim() !== '' ? (
-                  <Text style={local.taskDesc} numberOfLines={3}>
-                    {task.description}
-                  </Text>
+                  <View style={local.evidenceBlock}>
+                    <Text style={local.evidenceLabel}>Instructions</Text>
+                    <Text style={local.taskDesc}>{task.description}</Text>
+                  </View>
+                ) : null}
+                {task.specialNote.trim() !== '' ? (
+                  <View style={local.noteBox}>
+                    <Text style={local.noteLabel}>Special note</Text>
+                    <Text style={local.taskDesc}>{task.specialNote}</Text>
+                  </View>
                 ) : null}
 
                 <View style={local.taskMetaRow}>
@@ -474,11 +494,82 @@ export function TasksScreen({ isTabActive = true }: TasksScreenProps) {
                     </View>
                   ) : null}
                 </View>
+
+                {task.beforePhotos.length > 0 ? (
+                  <View style={local.evidenceBlock}>
+                    <Text style={local.evidenceLabel}>Before</Text>
+                    <TaskPhotoStrip taskId={task.id} photos={task.beforePhotos} kind="before" version={task.startedAt} />
+                  </View>
+                ) : null}
+                {task.afterPhotos.length > 0 ? (
+                  <View style={local.evidenceBlock}>
+                    <Text style={local.evidenceLabel}>After</Text>
+                    <TaskPhotoStrip taskId={task.id} photos={task.afterPhotos} kind="after" version={task.completedAt} />
+                  </View>
+                ) : null}
+                {task.signature ? (
+                  <View style={local.evidenceBlock}>
+                    <Text style={local.evidenceLabel}>Signature</Text>
+                    <SignaturePreview drawing={task.signature} plain />
+                  </View>
+                ) : null}
+
+                {task.completed ? (
+                  <TouchableOpacity
+                    style={local.cardAction}
+                    onPress={() => setReopenTask(task)}
+                    disabled={busy}
+                  >
+                    <Text style={local.cardActionTextMuted}>Reopen</Text>
+                  </TouchableOpacity>
+                ) : task.started ? (
+                  <TouchableOpacity
+                    style={local.cardAction}
+                    onPress={() => setEvidence({ task, mode: 'finish' })}
+                    disabled={busy}
+                  >
+                    <Text style={local.cardActionText}>Finish</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={local.cardAction}
+                    onPress={() => setEvidence({ task, mode: 'start' })}
+                    disabled={busy}
+                  >
+                    <Text style={local.cardActionText}>Start</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            </TouchableOpacity>
+            </View>
           );
         })}
       </ScrollView>
+
+      <TaskEvidenceSheet
+        task={evidence?.task ?? null}
+        mode={evidence?.mode ?? 'start'}
+        onClose={() => setEvidence(null)}
+        onUpdated={(updated) => {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          setTasks((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+          setEvidence(null);
+        }}
+      />
+
+      <SweetAlert
+        visible={reopenTask !== null}
+        title="Reopen this task?"
+        message="The finished photos and signature will be removed."
+        confirmText="Reopen"
+        cancelText="Keep completed"
+        variant="warning"
+        onClose={() => setReopenTask(null)}
+        onConfirm={() => {
+          const task = reopenTask;
+          setReopenTask(null);
+          if (task) void toggleTask(task);
+        }}
+      />
 
       <SweetAlert
         visible={alert !== null}
@@ -853,5 +944,46 @@ const local = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     flexShrink: 1,
+  },
+  evidenceBlock: { marginTop: spacing.md },
+  noteBox: {
+    marginTop: spacing.md,
+    padding: spacing.sm,
+    borderRadius: 12,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  noteLabel: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 10,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#B45309',
+  },
+  evidenceLabel: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 10,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#64748B',
+  },
+  cardAction: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,61,122,0.08)',
+  },
+  cardActionText: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 12,
+    color: colors.primary,
+  },
+  cardActionTextMuted: {
+    fontFamily: fontFamily.semiBold,
+    fontSize: 12,
+    color: '#64748B',
   },
 });

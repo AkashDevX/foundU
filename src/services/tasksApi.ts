@@ -1,6 +1,7 @@
 import { API_BASE_URL } from '../config/api';
 import { todayIsoInAppTimezone } from '../utils/formatDateTime';
-import type { EmployeeTask, TasksListPayload } from '../types/tasks';
+import type { EmployeeTask, TaskSignature, TasksListPayload } from '../types/tasks';
+import { fetchTrainingImage } from './trainingApi';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import { tryParseApiJson } from '../utils/parseApiJson';
 import {
@@ -188,12 +189,49 @@ function buildFallbackTask(id: string, completed: boolean): EmployeeTask {
     id,
     title: 'Task',
     description: '',
+    specialNote: '',
     dueLabel: completed ? 'Completed' : 'Pending',
     priority: 'medium',
     status: completed ? 'completed' : 'pending',
     completed,
+    started: false,
     category: 'Personal task',
+    beforePhotos: [],
+    afterPhotos: [],
+    signature: null,
   };
+}
+
+export type TaskUploadPhoto = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
+function taskPhotoUrl(
+  taskId: string,
+  kind: 'before' | 'after',
+  index: number,
+  version?: string | null,
+): string | null {
+  const numericId = resolveTaskNumericId(taskId);
+  if (!numericId) return null;
+  const base = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/tasks/${encodeURIComponent(numericId)}/photos/${kind}/${index}`;
+  const params = new URLSearchParams({ date: todayIsoDate() });
+  if (version && version.trim() !== '') params.set('v', version.trim());
+  return `${base}?${params.toString()}`;
+}
+
+/** Protected task photo as a local file URI the image view can render. */
+export function fetchTaskPhoto(
+  taskId: string,
+  kind: 'before' | 'after',
+  index: number,
+  version?: string | null,
+): Promise<string | null> {
+  const url = taskPhotoUrl(taskId, kind, index, version);
+  if (!url) return Promise.resolve(null);
+  return fetchTrainingImage(url);
 }
 
 function parseUpdateTaskResponse(parsed: unknown, id: string, completed: boolean): UpdateTaskResult {
@@ -302,4 +340,131 @@ export async function updateTaskCompletion(
   }
 
   return parseUpdateTaskResponse(parsed, numericId, completed);
+}
+
+export async function completeTaskWithEvidence(
+  taskId: string,
+  photos: TaskUploadPhoto[],
+  signature: TaskSignature,
+): Promise<UpdateTaskResult> {
+  const auth = await tenantAuthHeaders();
+  if (!auth.ok) return { ok: false, message: auth.message };
+
+  const numericId = resolveTaskNumericId(taskId);
+  if (!numericId) {
+    return { ok: false, message: 'This task cannot be updated from the app.' };
+  }
+  if (photos.length === 0) {
+    return { ok: false, message: 'Add at least one photo of the finished task.' };
+  }
+  if (signature.strokes.length === 0) {
+    return { ok: false, message: 'Draw your signature after adding the finished photos.' };
+  }
+
+  const form = new FormData();
+  form.append('completed', '1');
+  form.append('date', todayIsoDate());
+  form.append('signature_width', String(Math.max(1, Math.round(signature.width))));
+  form.append('signature_height', String(Math.max(1, Math.round(signature.height))));
+  form.append('signature_strokes', JSON.stringify(signature.strokes));
+  photos.forEach((photo) => {
+    form.append('after_photos[]', {
+      uri: photo.uri,
+      name: photo.name || 'task-after.jpg',
+      type: photo.type || 'image/jpeg',
+    } as unknown as Blob);
+  });
+
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/tasks/${encodeURIComponent(numericId)}/complete`;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: auth.headers.Authorization,
+  };
+  const company = auth.headers['X-Company-Slug'];
+  if (company) headers['X-Company-Slug'] = company;
+
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.timeout = 120000;
+    xhr.onerror = () => {
+      resolve({
+        ok: false,
+        message: 'Could not submit the task. Check your connection and try again.',
+      });
+    };
+    xhr.ontimeout = () => {
+      resolve({ ok: false, message: 'The upload took too long. Check your connection and try again.' });
+    };
+    xhr.onload = () => {
+      const raw = xhr.responseText ?? '';
+      const parsed = tryParseApiJson(raw);
+      if (xhr.status < 200 || xhr.status >= 300) {
+        resolve({ ok: false, message: formatApiError(parsed, raw, true) });
+        return;
+      }
+      resolve(parseUpdateTaskResponse(parsed, numericId, true));
+    };
+    xhr.send(form);
+  });
+}
+
+export async function startTaskWithPhotos(
+  taskId: string,
+  photos: TaskUploadPhoto[],
+): Promise<UpdateTaskResult> {
+  const auth = await tenantAuthHeaders();
+  if (!auth.ok) return { ok: false, message: auth.message };
+
+  const numericId = resolveTaskNumericId(taskId);
+  if (!numericId) {
+    return { ok: false, message: 'This task cannot be updated from the app.' };
+  }
+  if (photos.length === 0) {
+    return { ok: false, message: 'Add at least one before photo.' };
+  }
+
+  const form = new FormData();
+  photos.forEach((photo) => {
+    form.append('before_photos[]', {
+      uri: photo.uri,
+      name: photo.name || 'task-before.jpg',
+      type: photo.type || 'image/jpeg',
+    } as unknown as Blob);
+  });
+
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/api/v1/tasks/${encodeURIComponent(numericId)}/start`;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: auth.headers.Authorization,
+  };
+  const company = auth.headers['X-Company-Slug'];
+  if (company) headers['X-Company-Slug'] = company;
+
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.timeout = 120000;
+    xhr.onerror = () => {
+      resolve({
+        ok: false,
+        message: 'Could not start the task. Check your connection and try again.',
+      });
+    };
+    xhr.ontimeout = () => {
+      resolve({ ok: false, message: 'The upload took too long. Check your connection and try again.' });
+    };
+    xhr.onload = () => {
+      const raw = xhr.responseText ?? '';
+      const parsed = tryParseApiJson(raw);
+      if (xhr.status < 200 || xhr.status >= 300) {
+        resolve({ ok: false, message: formatApiError(parsed, raw, true) });
+        return;
+      }
+      resolve(parseUpdateTaskResponse(parsed, numericId, false));
+    };
+    xhr.send(form);
+  });
 }

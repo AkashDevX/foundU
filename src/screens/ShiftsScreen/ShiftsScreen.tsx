@@ -54,7 +54,8 @@ import {
   formatTimeHm,
   isPastWeek,
 } from '../../utils/weeklySchedule';
-import { appTodayLocalDate } from '../../utils/formatDateTime';
+import { appTodayLocalDate, todayIsoInAppTimezone } from '../../utils/formatDateTime';
+import { tradingHoursOnDate, type TradingHoursByDay } from '../../utils/tradingHours';
 
 type TabType = 'Upcoming' | 'Time off' | 'Available';
 
@@ -159,6 +160,29 @@ function ShiftInfoRow({
   );
 }
 
+function LocationDetails({
+  tradingHours,
+  date,
+  siteInformation,
+  notes,
+}: {
+  tradingHours?: TradingHoursByDay | null;
+  date: string;
+  siteInformation?: string | null;
+  notes?: string | null;
+}) {
+  const trading = tradingHoursOnDate(tradingHours, date);
+  return (
+    <>
+      {trading ? (
+        <NotesSection title={`Trading hours · ${trading.dateLabel}`} body={trading.hoursLabel} />
+      ) : null}
+      <NotesSection title="Relevant site information" body={siteInformation} />
+      <NotesSection title="Instructions" body={notes} />
+    </>
+  );
+}
+
 function NotesSection({ title, body }: { title: string; body: string | null | undefined }) {
   if (!body || body.trim() === '') return null;
   return (
@@ -248,12 +272,12 @@ function BreaksAndNotesCard({ profile }: { profile: UserProfileSnapshot }) {
 
       <NotesSection title="From your employer" body={profile.assignmentNotes} />
       <NotesSection title="Shift notes" body={profile.assignedShiftNotes} />
-      <NotesSection title="Site notes" body={profile.assignedWorkLocationNotes} />
+      <NotesSection title="Instructions" body={profile.assignedWorkLocationNotes} />
     </View>
   );
 }
 
-function ScheduleEntryCard({ entry }: { entry: ScheduleDayEntry }) {
+function ScheduleEntryCard({ entry, date }: { entry: ScheduleDayEntry; date: string }) {
   const isTimeOff = entry.type === 'time_off';
   const isSuggestion = entry.is_suggestion;
 
@@ -276,7 +300,18 @@ function ScheduleEntryCard({ entry }: { entry: ScheduleDayEntry }) {
       <Text style={s.scheduleEntryTitle}>{isTimeOff ? 'Day off' : entry.title || entry.subtitle}</Text>
       {!isTimeOff && entry.subtitle ? <Text style={s.scheduleEntrySubtitle}>{entry.subtitle}</Text> : null}
       {entry.meta ? <Text style={s.scheduleEntryMeta}>{entry.meta}</Text> : null}
+      {!isTimeOff && entry.work_location?.address ? (
+        <Text style={s.scheduleEntryMeta}>{entry.work_location.address}</Text>
+      ) : null}
       {entry.notes ? <Text style={s.scheduleEntryNotes}>{entry.notes}</Text> : null}
+      {!isTimeOff ? (
+        <LocationDetails
+          tradingHours={entry.work_location?.trading_hours}
+          date={date}
+          siteInformation={entry.work_location?.site_information}
+          notes={entry.work_location?.notes}
+        />
+      ) : null}
       {isSuggestion ? (
         <View style={s.suggestionBadge}>
           <Text style={s.suggestionBadgeText}>FROM ASSIGNMENT</Text>
@@ -315,7 +350,7 @@ function ScheduleDayRow({
           <Text style={s.scheduleDayEmpty}>No shift scheduled</Text>
         ) : (
           entries.map((entry, index) => (
-            <ScheduleEntryCard key={`${day.date}-${entry.id ?? index}`} entry={entry} />
+            <ScheduleEntryCard key={`${day.date}-${entry.id ?? index}`} entry={entry} date={day.date} />
           ))
         )}
       </View>
@@ -781,6 +816,11 @@ export function ShiftsScreen({ isTabActive = true }: { isTabActive?: boolean }) 
         />
         <ShiftInfoRow icon="briefcase" label="Department" value={departmentLine(profile ?? {})} />
         <ShiftInfoRow icon="map-pin" label="Work site" value={workSiteLabel} />
+        <LocationDetails
+          tradingHours={profile?.assignedWorkLocationTradingHours}
+          date={todayIsoInAppTimezone()}
+          siteInformation={profile?.assignedWorkLocationSiteInformation}
+        />
 
         {workCoords ? (
           <TouchableOpacity

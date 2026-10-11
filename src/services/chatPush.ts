@@ -5,6 +5,7 @@
 import { Platform, PermissionsAndroid, DeviceEventEmitter } from 'react-native';
 import { createNavigationContainerRef } from '@react-navigation/native';
 import { registerDeviceToken, unregisterDeviceToken } from './deviceTokenApi';
+import { showDocumentRenewalNotification } from './documentRenewalNative';
 
 export const navigationRef = createNavigationContainerRef();
 
@@ -16,6 +17,28 @@ export const TRAINING_ASSIGNED_EVENT = 'crulynk.training.assigned';
 
 /** Fired when the employee opens a training assignment notification. */
 export const OPEN_TRAINING_TAB_EVENT = 'crulynk.training.open';
+
+/** Fired when a task assignment push arrives, or the task list should reload. */
+export const TASK_ASSIGNED_EVENT = 'crulynk.tasks.assigned';
+
+/** Fired when the employee opens a task assignment notification. */
+export const OPEN_TASKS_TAB_EVENT = 'crulynk.tasks.open';
+
+/** Pending task count reported by the Tasks screen so the tab badge stays current. */
+export const TASKS_PENDING_EVENT = 'crulynk.tasks.pending';
+
+export type TaskAssignedPayload = {
+  notify?: boolean;
+  title?: string;
+  body?: string;
+};
+
+export type TrainingAssignedPayload = {
+  notify?: boolean;
+  moduleTitle?: string;
+  dueLabel?: string;
+  body?: string;
+};
 
 export type ChatIncomingPayload = {
   conversationId: number;
@@ -76,6 +99,35 @@ function isTrainingAssigned(remoteMessage: RemoteMessageLike): boolean {
   return kindFromMessage(remoteMessage) === 'training_assigned';
 }
 
+function isTaskAssigned(remoteMessage: RemoteMessageLike): boolean {
+  return kindFromMessage(remoteMessage) === 'task_assigned';
+}
+
+function dataString(remoteMessage: RemoteMessageLike, key: string): string {
+  const raw = remoteMessage?.data?.[key];
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function trainingAssignedPayload(
+  remoteMessage: RemoteMessageLike,
+  notify: boolean,
+): TrainingAssignedPayload {
+  return {
+    notify,
+    moduleTitle: dataString(remoteMessage, 'module_title') || 'Training',
+    dueLabel: dataString(remoteMessage, 'due_label'),
+    body: remoteMessage?.notification?.body || '',
+  };
+}
+
+function taskAssignedPayload(remoteMessage: RemoteMessageLike, notify: boolean): TaskAssignedPayload {
+  return {
+    notify,
+    title: remoteMessage?.notification?.title || 'Task assigned',
+    body: remoteMessage?.notification?.body || 'A new task has been assigned.',
+  };
+}
+
 function openMyProfileFromPush(): void {
   if (!navigationRef.isReady()) {
     setTimeout(openMyProfileFromPush, 400);
@@ -85,9 +137,14 @@ function openMyProfileFromPush(): void {
 }
 
 function routeOpenedNotification(remoteMessage: RemoteMessageLike): void {
+  if (isTaskAssigned(remoteMessage)) {
+    DeviceEventEmitter.emit(OPEN_TASKS_TAB_EVENT);
+    DeviceEventEmitter.emit(TASK_ASSIGNED_EVENT, taskAssignedPayload(remoteMessage, false));
+    return;
+  }
   if (isTrainingAssigned(remoteMessage)) {
     DeviceEventEmitter.emit(OPEN_TRAINING_TAB_EVENT);
-    DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT);
+    DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT, trainingAssignedPayload(remoteMessage, true));
     return;
   }
   if (kindFromMessage(remoteMessage) === 'document_renewal') {
@@ -171,9 +228,6 @@ export async function startChatPush(): Promise<void> {
   started = true;
 
   try {
-    await requestAndroidPostNotifications();
-    await syncTokenToBackend();
-
     const messaging = fb.getMessaging();
 
     tokenRefreshUnsub = fb.onTokenRefresh(messaging, async (token) => {
@@ -184,9 +238,26 @@ export async function startChatPush(): Promise<void> {
       routeOpenedNotification(remoteMessage);
     });
 
+    // Read a tap that launched the app from a fully closed state before any
+    // token work, so that launch is not lost if registration is slow.
+    const initial = await fb.getInitialNotification(messaging);
+    if (initial) {
+      routeOpenedNotification(initial);
+    }
+
     foregroundUnsub = fb.onMessage(messaging, async (remoteMessage) => {
+      if (kindFromMessage(remoteMessage) === 'document_renewal') {
+        const title = dataString(remoteMessage, 'title') || remoteMessage?.notification?.title || '';
+        const body = dataString(remoteMessage, 'body') || remoteMessage?.notification?.body || '';
+        await showDocumentRenewalNotification(title, body);
+        return;
+      }
+      if (isTaskAssigned(remoteMessage)) {
+        DeviceEventEmitter.emit(TASK_ASSIGNED_EVENT, taskAssignedPayload(remoteMessage, true));
+        return;
+      }
       if (isTrainingAssigned(remoteMessage)) {
-        DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT);
+        DeviceEventEmitter.emit(TRAINING_ASSIGNED_EVENT, trainingAssignedPayload(remoteMessage, true));
         return;
       }
       emitIncomingChat(remoteMessage);
@@ -196,10 +267,8 @@ export async function startChatPush(): Promise<void> {
       }
     });
 
-    const initial = await fb.getInitialNotification(messaging);
-    if (initial) {
-      routeOpenedNotification(initial);
-    }
+    await requestAndroidPostNotifications();
+    await syncTokenToBackend();
   } catch (e) {
     started = false;
     console.warn('[chatPush] startChatPush failed:', (e as Error)?.message || e);

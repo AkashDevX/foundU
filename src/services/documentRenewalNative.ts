@@ -7,6 +7,7 @@ import {
 } from '../utils/documentRenewal';
 
 type DocumentRenewalNativeModule = {
+  showNow: (title: string, body: string) => Promise<void>;
   syncReminder: (documentsJson: string) => Promise<void>;
   cancelReminders: () => Promise<void>;
   consumeOpenRequest: () => Promise<boolean>;
@@ -16,6 +17,21 @@ const nativeModule = NativeModules.DocumentRenewal as DocumentRenewalNativeModul
 
 export function isDocumentRenewalNativeLinked(): boolean {
   return Platform.OS === 'android' && nativeModule != null && typeof nativeModule.syncReminder === 'function';
+}
+
+/** Same CruLynk status-bar alert used when a renewal push arrives while the app is open. */
+export async function showDocumentRenewalNotification(title: string, body: string): Promise<void> {
+  if (!isDocumentRenewalNativeLinked() || !nativeModule?.showNow) return;
+  const safeTitle = title.trim();
+  const safeBody = body.trim();
+  if (safeTitle === '' || safeBody === '') return;
+  try {
+    await nativeModule.showNow(safeTitle, safeBody);
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[DocumentRenewal] showNow failed:', error);
+    }
+  }
 }
 
 export async function syncDocumentRenewalReminders(items: DocumentRenewalItem[]): Promise<void> {

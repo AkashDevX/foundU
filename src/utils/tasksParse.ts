@@ -1,4 +1,11 @@
-import type { EmployeeTask, TaskPriority, TaskStatus, TasksListPayload } from '../types/tasks';
+import type {
+  EmployeeTask,
+  TaskPhotoRef,
+  TaskPriority,
+  TaskSignature,
+  TaskStatus,
+  TasksListPayload,
+} from '../types/tasks';
 import {
   calendarDayKeyInAppTimezone,
   formatCalendarDateLabel,
@@ -69,6 +76,47 @@ function formatDueLabel(row: Record<string, unknown>): string {
 
   if (row.completed_at || row.completedAt) return 'Completed';
   return 'No due date';
+}
+
+function parsePhotoRefs(raw: unknown): TaskPhotoRef[] {
+  if (!Array.isArray(raw)) return [];
+  const photos: TaskPhotoRef[] = [];
+  raw.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const row = item as Record<string, unknown>;
+    const index = Number(row.index);
+    if (!Number.isInteger(index) || index < 0) return;
+    const name = typeof row.name === 'string' && row.name.trim() !== '' ? row.name.trim() : 'photo.jpg';
+    photos.push({ index, name });
+  });
+  return photos;
+}
+
+function parseSignature(raw: unknown): TaskSignature | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  const width = Number(row.width);
+  const height = Number(row.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  if (!Array.isArray(row.strokes)) return null;
+  const strokes = row.strokes
+    .map((stroke) => {
+      if (!Array.isArray(stroke)) return null;
+      const points = stroke
+        .map((point) => {
+          if (!point || typeof point !== 'object') return null;
+          const p = point as Record<string, unknown>;
+          const x = Number(p.x);
+          const y = Number(p.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+          return { x, y };
+        })
+        .filter((point): point is { x: number; y: number } => point !== null);
+      return points.length > 0 ? points : null;
+    })
+    .filter((stroke): stroke is { x: number; y: number }[] => stroke !== null);
+  if (strokes.length === 0) return null;
+  return { width, height, strokes };
 }
 
 function unwrapTaskRow(raw: unknown): Record<string, unknown> | null {
@@ -170,6 +218,18 @@ export function normalizeTask(raw: unknown, fallbackIndex?: number): EmployeeTas
 
   const status = normalizeStatus(row.status ?? row.state, row.completed ?? row.is_completed ?? row.isCompleted);
   const completed = status === 'completed';
+  const startedAtRaw = row.started_at ?? row.startedAt;
+  const startedAt = typeof startedAtRaw === 'string' && startedAtRaw.trim() !== '' ? startedAtRaw : null;
+  const started =
+    row.started === true ||
+    row.started === 1 ||
+    row.started === '1' ||
+    startedAt !== null;
+  const specialNote =
+    (typeof row.notes === 'string' && row.notes.trim()) ||
+    (typeof row.special_note === 'string' && row.special_note.trim()) ||
+    (typeof row.specialNote === 'string' && row.specialNote.trim()) ||
+    '';
 
   const dueAtRaw =
     row.due_at ??
@@ -186,14 +246,20 @@ export function normalizeTask(raw: unknown, fallbackIndex?: number): EmployeeTas
     id,
     title: title || 'Untitled task',
     description,
+    specialNote,
     dueLabel: formatDueLabel(row),
     priority: normalizePriority(row.priority ?? row.priority_level ?? row.urgency),
     status,
     completed,
+    started,
+    startedAt,
     category,
     locationLabel,
     dueAt,
     completedAt,
+    beforePhotos: parsePhotoRefs(row.before_photos ?? row.beforePhotos),
+    afterPhotos: parsePhotoRefs(row.after_photos ?? row.afterPhotos),
+    signature: parseSignature(row.signature),
   };
 }
 

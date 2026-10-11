@@ -1014,6 +1014,24 @@ export const dashboardStyles = StyleSheet.create({
     lineHeight: 22,
     width: '100%',
   },
+  locationDetailBlock: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  locationDetailLabel: {
+    fontFamily: fontFamily.bold,
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 4,
+  },
+  locationDetailBody: {
+    fontFamily: fontFamily.regular,
+    fontSize: 14,
+    color: colors.text.primary,
+    lineHeight: 21,
+  },
   locationLoadingRow: {
     flexDirection: 'row',
     alignItems: 'center',

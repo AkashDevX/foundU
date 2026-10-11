@@ -7,7 +7,6 @@ import {
   Animated,
   LayoutChangeEvent,
   Platform,
-  Alert,
   AppState,
   DeviceEventEmitter,
   type AppStateStatus,
@@ -18,6 +17,8 @@ import { GeofenceAutoClockOutMonitor } from '../components/GeofenceAutoClockOutM
 import { BreakWindowMonitor } from '../components/BreakWindowMonitor';
 import { DocumentRenewalMonitor } from '../components/DocumentRenewalMonitor';
 import { ShiftComingSoonMonitor } from '../components/ShiftComingSoonMonitor';
+import { SweetAlert } from '../components/SweetAlert';
+import { TrainingAssignedNotice } from '../components/TrainingAssignedNotice';
 import { LogoutSweetAlertProvider } from '../context/LogoutSweetAlertContext';
 import { colors, fontFamily } from '../theme/theme';
 import { DashboardScreen } from '../screens/DashboardScreen';
@@ -30,11 +31,18 @@ import { runWhenIdle } from '../utils/runWhenIdle';
 import { fetchConversations } from '../services/messagingApi';
 import {
   CHAT_INCOMING_EVENT,
+  OPEN_TASKS_TAB_EVENT,
   OPEN_TRAINING_TAB_EVENT,
   startChatPush,
+  TASK_ASSIGNED_EVENT,
+  TASKS_PENDING_EVENT,
   TRAINING_ASSIGNED_EVENT,
+  type TaskAssignedPayload,
+  type TrainingAssignedPayload,
 } from '../services/chatPush';
 import { fetchAssignedTrainings } from '../services/trainingApi';
+import { fetchAssignedTasks } from '../services/tasksApi';
+import type { EmployeeTask } from '../types/tasks';
 
 const ACTIVE = colors.primary;
 const INACTIVE = '#94A3B8';
@@ -121,7 +129,7 @@ function TabItem({
       accessibilityState={{ selected: isActive }}
       accessibilityLabel={
         showBadge
-          ? `${label}, ${badgeCount} ${label === 'Train' ? 'to complete' : 'unread'}`
+          ? `${label}, ${badgeCount} ${label === 'Chat' ? 'unread' : 'to complete'}`
           : label
       }
     >
@@ -164,11 +172,13 @@ function FloatingTabDock({
   onChange,
   chatUnreadCount = 0,
   trainingPendingCount = 0,
+  taskPendingCount = 0,
 }: {
   activeTab: MainTabKey;
   onChange: (key: MainTabKey) => void;
   chatUnreadCount?: number;
   trainingPendingCount?: number;
+  taskPendingCount?: number;
 }) {
   const [layouts, setLayouts] = useState<Partial<Record<MainTabKey, TabLayout>>>({});
   const indicatorX = useRef(new Animated.Value(0)).current;
@@ -274,7 +284,9 @@ function FloatingTabDock({
                   ? chatUnreadCount
                   : tab.key === 'training'
                     ? trainingPendingCount
-                    : 0
+                    : tab.key === 'tasks'
+                      ? taskPendingCount
+                      : 0
               }
             />
           ))}
@@ -294,6 +306,16 @@ function formatTrainingDue(isoDate: string): string {
   });
 }
 
+function taskAssignedMessage(tasks: EmployeeTask[]): string {
+  if (tasks.length === 1) {
+    const task = tasks[0];
+    const due =
+      task.dueLabel && task.dueLabel !== 'No due date' ? ` Due ${task.dueLabel}.` : '';
+    return `${task.title} has been assigned.${due}`;
+  }
+  return `${tasks.length} tasks have been assigned.`;
+}
+
 /** Count of conversations that have at least one unread message. */
 function unreadChatCountFromInbox(
   conversations: Array<{ unread_count?: number | null }>,
@@ -308,6 +330,13 @@ export function MainTabs() {
   const [monitorReady, setMonitorReady] = useState(false);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [trainingPendingCount, setTrainingPendingCount] = useState(0);
+  const [taskPendingCount, setTaskPendingCount] = useState(0);
+  const [taskNotice, setTaskNotice] = useState<{ title: string; body: string } | null>(null);
+  const [trainingNotice, setTrainingNotice] = useState<{
+    moduleTitle: string;
+    dueLabel: string;
+    extraCount: number;
+  } | null>(null);
 
   const bottomOffset = useMemo(
     () => Math.max(insets.bottom, FLOATING_TAB_BAR_BOTTOM_INSET),
@@ -320,7 +349,44 @@ export function MainTabs() {
     setChatUnreadCount(unreadChatCountFromInbox(res.data.conversations || []));
   }, []);
 
+  const seenTaskIds = useRef<Set<string> | null>(null);
+  const taskAlertFromPush = useRef(false);
+  const lastTaskAlertAt = useRef(0);
+  const announceTask = useCallback((title: string, body: string) => {
+    const now = Date.now();
+    if (now - lastTaskAlertAt.current < 5000) return;
+    lastTaskAlertAt.current = now;
+    setTaskNotice({ title, body });
+  }, []);
+  const refreshTaskBadge = useCallback(async () => {
+    const res = await fetchAssignedTasks();
+    if (!res.ok) return;
+    const tasks = res.payload.tasks;
+    setTaskPendingCount(tasks.filter((task) => !task.completed).length);
+    const nextIds = new Set(tasks.map((task) => task.id));
+    const seen = seenTaskIds.current;
+    seenTaskIds.current = nextIds;
+    const announcedByPush = taskAlertFromPush.current;
+    taskAlertFromPush.current = false;
+    if (seen === null || announcedByPush) return;
+    const assigned = tasks.filter((task) => !task.completed && !seen.has(task.id));
+    if (assigned.length === 0) return;
+    announceTask('Task assigned', taskAssignedMessage(assigned));
+  }, [announceTask]);
+
   const seenTrainingIds = useRef<Set<number> | null>(null);
+  const trainingAlertFromPush = useRef(false);
+  const lastTrainingAlertAt = useRef(0);
+  const showTrainingNotice = useCallback((moduleTitle: string, dueLabel: string, extraCount = 0) => {
+    const now = Date.now();
+    if (now - lastTrainingAlertAt.current < 5000) return;
+    lastTrainingAlertAt.current = now;
+    setTrainingNotice({
+      moduleTitle: moduleTitle.trim() || 'Training',
+      dueLabel: dueLabel.trim(),
+      extraCount,
+    });
+  }, []);
   const refreshTrainingBadge = useCallback(async () => {
     const res = await fetchAssignedTrainings();
     if (!res.ok) return;
@@ -328,20 +394,20 @@ export function MainTabs() {
     const nextIds = new Set(res.trainings.map((item) => item.id));
     const seen = seenTrainingIds.current;
     seenTrainingIds.current = nextIds;
-    if (seen === null) return;
+    const announcedByPush = trainingAlertFromPush.current;
+    trainingAlertFromPush.current = false;
+    if (seen === null || announcedByPush) return;
     const assigned = res.trainings.filter(
-      (item) => item.due_date && item.status !== 'completed' && !seen.has(item.id),
+      (item) => item.status !== 'completed' && !seen.has(item.id),
     );
     if (assigned.length === 0) return;
     const first = assigned[0];
-    const due = first.due_date ? formatTrainingDue(first.due_date) : '';
-    Alert.alert(
-      'Training assigned',
-      assigned.length === 1
-        ? `${first.title} has been assigned. Please complete it${due ? ` by ${due}` : ''}.`
-        : `${assigned.length} training modules have been assigned. Please complete them.`,
+    showTrainingNotice(
+      first.title,
+      first.due_date ? formatTrainingDue(first.due_date) : '',
+      assigned.length - 1,
     );
-  }, []);
+  }, [showTrainingNotice]);
 
   useEffect(() => {
     setMountedTabs((prev) => {
@@ -371,9 +437,16 @@ export function MainTabs() {
   }, [refreshChatBadge]);
 
   useEffect(() => {
-    const assigned = DeviceEventEmitter.addListener(TRAINING_ASSIGNED_EVENT, () => {
-      void refreshTrainingBadge();
-    });
+    const assigned = DeviceEventEmitter.addListener(
+      TRAINING_ASSIGNED_EVENT,
+      (payload?: TrainingAssignedPayload) => {
+        if (payload?.notify) {
+          trainingAlertFromPush.current = true;
+          showTrainingNotice(payload.moduleTitle || 'Training', payload.dueLabel || '', 0);
+        }
+        void refreshTrainingBadge();
+      },
+    );
     const open = DeviceEventEmitter.addListener(OPEN_TRAINING_TAB_EVENT, () => {
       setActiveTab('training');
     });
@@ -381,20 +454,50 @@ export function MainTabs() {
       assigned.remove();
       open.remove();
     };
-  }, [refreshTrainingBadge]);
+  }, [refreshTrainingBadge, showTrainingNotice]);
+
+  useEffect(() => {
+    const assigned = DeviceEventEmitter.addListener(
+      TASK_ASSIGNED_EVENT,
+      (payload?: TaskAssignedPayload) => {
+        if (payload?.notify) {
+          taskAlertFromPush.current = true;
+          announceTask(
+            payload.title || 'Task assigned',
+            payload.body || 'A new task has been assigned.',
+          );
+        }
+        void refreshTaskBadge();
+      },
+    );
+    const open = DeviceEventEmitter.addListener(OPEN_TASKS_TAB_EVENT, () => {
+      setActiveTab('tasks');
+    });
+    const pending = DeviceEventEmitter.addListener(TASKS_PENDING_EVENT, (count: unknown) => {
+      if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
+        setTaskPendingCount(count);
+      }
+    });
+    return () => {
+      assigned.remove();
+      open.remove();
+      pending.remove();
+    };
+  }, [announceTask, refreshTaskBadge]);
 
   // Badge sync while signed in — keep light so local `artisan serve` is not starved.
-  // Skip while Chat is open (ChatScreen already polls the inbox).
+  // Skip the chat inbox poll while Chat is open (ChatScreen already polls it).
+  // Task and training badges still refresh so a new assignment shows on the dock.
   useEffect(() => {
-    if (activeTab === 'chat') return undefined;
-
     let cancelled = false;
     let inFlight = false;
     const tick = async () => {
       if (cancelled || inFlight || AppState.currentState !== 'active') return;
       inFlight = true;
       try {
-        await Promise.all([refreshChatBadge(), refreshTrainingBadge()]);
+        const jobs = [refreshTrainingBadge(), refreshTaskBadge()];
+        if (activeTab !== 'chat') jobs.unshift(refreshChatBadge());
+        await Promise.all(jobs);
       } finally {
         inFlight = false;
       }
@@ -414,7 +517,7 @@ export function MainTabs() {
       clearInterval(interval);
       sub.remove();
     };
-  }, [activeTab, refreshChatBadge, refreshTrainingBadge]);
+  }, [activeTab, refreshChatBadge, refreshTrainingBadge, refreshTaskBadge]);
 
   // Refresh once after leaving Chat (messages may have been marked read).
   useEffect(() => {
@@ -424,7 +527,10 @@ export function MainTabs() {
     if (activeTab !== 'training') {
       void refreshTrainingBadge();
     }
-  }, [activeTab, refreshChatBadge, refreshTrainingBadge]);
+    if (activeTab !== 'tasks') {
+      void refreshTaskBadge();
+    }
+  }, [activeTab, refreshChatBadge, refreshTrainingBadge, refreshTaskBadge]);
 
   return (
     <LogoutSweetAlertProvider>
@@ -432,6 +538,32 @@ export function MainTabs() {
       {monitorReady ? <ShiftComingSoonMonitor /> : null}
       {monitorReady ? <BreakWindowMonitor /> : null}
       {monitorReady ? <DocumentRenewalMonitor /> : null}
+
+      <TrainingAssignedNotice
+        visible={trainingNotice != null}
+        moduleTitle={trainingNotice?.moduleTitle ?? 'Training'}
+        dueLabel={trainingNotice?.dueLabel ?? ''}
+        extraCount={trainingNotice?.extraCount ?? 0}
+        onClose={() => setTrainingNotice(null)}
+        onOpen={() => {
+          setTrainingNotice(null);
+          setActiveTab('training');
+        }}
+      />
+
+      <SweetAlert
+        visible={taskNotice != null}
+        title={taskNotice?.title ?? 'Task assigned'}
+        message={taskNotice?.body ?? ''}
+        confirmText="View tasks"
+        cancelText="Not now"
+        variant="task"
+        onClose={() => setTaskNotice(null)}
+        onConfirm={() => {
+          setTaskNotice(null);
+          setActiveTab('tasks');
+        }}
+      />
 
       <View style={styles.container}>
         <View style={styles.screenStack}>
@@ -457,6 +589,7 @@ export function MainTabs() {
             onChange={setActiveTab}
             chatUnreadCount={chatUnreadCount}
             trainingPendingCount={trainingPendingCount}
+            taskPendingCount={taskPendingCount}
           />
         </View>
       </View>
